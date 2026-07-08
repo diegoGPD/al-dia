@@ -217,6 +217,21 @@ summary { cursor: pointer; font-weight: 600; font-size: 14px; padding: 6px 0; co
 .inv-box.good { background: var(--green-light); }
 .inv-box.warn { background: var(--amber-light); }
 
+/* ---------- insights ---------- */
+.summary-text { font-size: 15px; line-height: 1.55; margin: 0; }
+.ins-block { border-top: 1px solid var(--line); padding: 10px 0; }
+.ins-block:first-of-type { border-top: 0; }
+.ins-block > strong { display: block; font-size: 14px; margin-bottom: 6px; }
+.bd-inv.pos { color: var(--green-dark); font-weight: 700; }
+.bd-inv.neg { color: var(--red); font-weight: 700; }
+.bd-amt.pos { color: var(--green-dark); }
+.bd-amt.neg { color: var(--red); }
+strong.pos { color: var(--green-dark); }
+strong.neg { color: var(--red); }
+.whatif label { margin-bottom: 14px; }
+.whatif input[type="range"] { width: 100%; margin-top: 6px; accent-color: var(--green); }
+.whatif .day-rev { margin-top: 4px; }
+
 /* ---------- money accounts ---------- */
 .seg.subnav { margin-bottom: 14px; }
 .acc-row { padding: 12px 0; border-bottom: 1px solid var(--line); }

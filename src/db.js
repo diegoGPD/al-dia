@@ -146,6 +146,15 @@ CREATE TABLE IF NOT EXISTS transfers (
 );
 CREATE INDEX IF NOT EXISTS idx_transfers_loc_date ON transfers(location_id, date);
 
+-- Performance targets (one per type per location).
+CREATE TABLE IF NOT EXISTS goals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (type IN ('profit','margin')),
+  target REAL NOT NULL,
+  UNIQUE (location_id, type)
+);
+
 -- Manual balance corrections (PIN-protected): signed amount that nudges an
 -- account's balance to match reality.
 CREATE TABLE IF NOT EXISTS account_adjustments (
