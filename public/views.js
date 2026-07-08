@@ -90,7 +90,9 @@
   }
 
   function bindPeriodBar(app) {
-    app.querySelectorAll('.seg-btn').forEach(b => b.onclick = () => {
+    // Only the day/week/month buttons — not other .seg-btn elements like the
+    // Costs/Accounts sub-tabs, whose handlers this would otherwise overwrite.
+    app.querySelectorAll('.seg-btn[data-gran]').forEach(b => b.onclick = () => {
       state.granularity = b.dataset.gran;
       localStorage.setItem('aldia_gran', b.dataset.gran);
       render();
