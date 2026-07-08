@@ -58,6 +58,15 @@ npm start        # http://localhost:3000
 ### Benchmarks
 The dashboard compares your food, labor, prime, occupancy and net-margin percentages against **general industry ranges** (clearly labeled — they're not your targets) and flags anything well outside them. Tag categories in Settings ("counts as food / labor / occupancy") to keep these accurate.
 
+## Team schedule
+The **Team** tab has the employee roster (name, role, hourly rate or fixed weekly salary) and a weekly shift grid — tap a cell to set start/end times (an end time earlier than the start means the shift runs past midnight). "Copy last week" duplicates the previous week's schedule. As you build the week it totals hours and labor cost per employee (salaried people count at their flat weekly rate) and compares the total against your budgeted payroll — recurring costs in categories tagged "labor" — flagging deviations beyond ±10%. Anyone over 48 h/week (the typical Mexican full-time standard) gets a soft heads-up. "Export as image" downloads a clean PNG of the grid — names, days and times only, no pay information — sized to read well on a phone, ready for the team's WhatsApp group. Past weeks stay browsable.
+
+## Password reset
+Managers: the owner resets it from **Settings → People → ✎**. For the owner account, run this on the server (Railway: project → service → three-dot menu → *SSH*, or `railway ssh` with the CLI):
+```
+node scripts/reset-password.js you@email.com newpassword123
+```
+
 ## Break-even math
 Break-even sales = fixed costs ÷ (1 − variable-cost ratio). Fixed costs are your recurring costs (daily equivalents) plus one-offs for the period; the variable ratio comes from your actual logged data, falling back to category defaults until you have real numbers.
 

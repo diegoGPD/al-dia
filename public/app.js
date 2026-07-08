@@ -79,6 +79,7 @@ const App = (() => {
     { route: 'dashboard', icon: '📊', label: 'Home' },
     { route: 'log', icon: '✏️', label: 'Log' },
     { route: 'breakdown', icon: '🧾', label: 'Costs' },
+    { route: 'schedule', icon: '👥', label: 'Team' },
     { route: 'settings', icon: '⚙️', label: 'Settings' }
   ];
   const LOG_ROUTES = ['log', 'log-revenue', 'log-costs', 'oneoff', 'recurring'];

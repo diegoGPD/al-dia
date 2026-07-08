@@ -245,5 +245,5 @@ function benchmarks(sum) {
 module.exports = {
   periodBounds, prevPeriodAnchor, addDays,
   summary, breakEven, trend, benchmarks,
-  recurringDailyNow, dailyRate
+  recurringDailyNow, dailyRate, recurringForRange
 };

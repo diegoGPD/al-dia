@@ -114,6 +114,30 @@ CREATE TABLE IF NOT EXISTS recurring_costs (
   active INTEGER NOT NULL DEFAULT 1
 );
 
+-- Employee roster (per location)
+CREATE TABLE IF NOT EXISTS employees (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  position TEXT,
+  pay_type TEXT NOT NULL DEFAULT 'hourly' CHECK (pay_type IN ('hourly','salary')),
+  rate REAL NOT NULL DEFAULT 0,       -- $/hour, or flat $/week for salary
+  active INTEGER NOT NULL DEFAULT 1
+);
+
+-- One shift per employee per day. Times in minutes from midnight;
+-- end < start means the shift runs past midnight.
+CREATE TABLE IF NOT EXISTS shifts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+  employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,                 -- YYYY-MM-DD
+  start_min INTEGER NOT NULL,
+  end_min INTEGER NOT NULL,
+  UNIQUE (employee_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_shifts_loc_date ON shifts(location_id, date);
+
 CREATE TABLE IF NOT EXISTS oneoff_costs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
