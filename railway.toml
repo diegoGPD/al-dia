@@ -6,5 +6,5 @@ builder = "dockerfile"
 startCommand = "node server.js"
 restartPolicyType = "on_failure"
 
-# Attach a volume in the Railway dashboard mounted at /data
-# (Service → Settings → Volumes → mount path: /data)
+# Attach a volume: right-click the project canvas → Volume (or ⌘K → "Create Volume"),
+# attach it to this service, mount path: /data
