@@ -164,8 +164,10 @@ r.post('/categories/:group', requireOwner, checkLocation, (req, res) => {
       .run(req.locationId, name,
         ['labor', 'occupancy'].includes(req.body.benchmark_tag) ? req.body.benchmark_tag : null, pos);
   } else {
-    result = db.prepare(`INSERT INTO revenue_categories (location_id, name, position) VALUES (?,?,?)`)
-      .run(req.locationId, name, pos);
+    result = db.prepare(
+      `INSERT INTO revenue_categories (location_id, name, commission_percent, commission_invoiced, position) VALUES (?,?,?,?,?)`)
+      .run(req.locationId, name, num(req.body.commission_percent),
+        req.body.commission_invoiced !== undefined ? bool01(req.body.commission_invoiced) : 1, pos);
   }
   res.json({ id: Number(result.lastInsertRowid) });
 });
@@ -199,7 +201,11 @@ r.put('/categories/:group/:id', requireOwner, checkLocation, (req, res) => {
           : cat.benchmark_tag,
         id);
   } else {
-    db.prepare(`UPDATE revenue_categories SET name=? WHERE id=?`).run(name, id);
+    db.prepare(`UPDATE revenue_categories SET name=?, commission_percent=?, commission_invoiced=? WHERE id=?`)
+      .run(name,
+        req.body.commission_percent !== undefined ? num(req.body.commission_percent) : cat.commission_percent,
+        req.body.commission_invoiced !== undefined ? bool01(req.body.commission_invoiced) : cat.commission_invoiced,
+        id);
   }
   res.json({ ok: true });
 });
@@ -225,7 +231,7 @@ r.get('/revenue', checkLocation, (req, res) => {
   if (badDate(date)) return res.status(400).json({ error: 'Invalid date' });
   const entry = db.prepare('SELECT * FROM revenue_entries WHERE location_id = ? AND date = ?').get(req.locationId, date);
   const items = entry
-    ? db.prepare('SELECT category_id, amount FROM revenue_items WHERE entry_id = ?').all(entry.id) : [];
+    ? db.prepare('SELECT category_id, amount, commission_amount, commission_invoiced FROM revenue_items WHERE entry_id = ?').all(entry.id) : [];
   res.json({ entry: entry || null, items });
 });
 
@@ -248,9 +254,20 @@ r.put('/revenue', checkLocation, (req, res) => {
       'INSERT INTO revenue_entries (location_id, date, total, note) VALUES (?,?,?,?)')
       .run(req.locationId, date, finalTotal, note || null).lastInsertRowid);
   }
-  const ins = db.prepare('INSERT INTO revenue_items (entry_id, category_id, amount) VALUES (?,?,?)');
-  breakdown.forEach(i => ins.run(entryId, Number(i.category_id), num(i.amount)));
-  res.json({ ok: true, total: finalTotal });
+  // Compute each channel's commission from its category settings and store it.
+  const cats = db.prepare('SELECT id, commission_percent, commission_invoiced FROM revenue_categories WHERE location_id = ?')
+    .all(req.locationId);
+  const catById = Object.fromEntries(cats.map(c => [c.id, c]));
+  const ins = db.prepare(
+    'INSERT INTO revenue_items (entry_id, category_id, amount, commission_amount, commission_invoiced) VALUES (?,?,?,?,?)');
+  let commissions = 0;
+  breakdown.forEach(i => {
+    const cat = catById[Number(i.category_id)];
+    const commission = cat && cat.commission_percent ? num(i.amount) * cat.commission_percent / 100 : 0;
+    commissions += commission;
+    ins.run(entryId, Number(i.category_id), num(i.amount), commission, cat ? cat.commission_invoiced : 0);
+  });
+  res.json({ ok: true, total: finalTotal, commissions });
 });
 
 r.delete('/revenue', checkLocation, (req, res) => {
@@ -414,14 +431,20 @@ r.post('/import', requireOwner, checkLocation, (req, res) => {
   if (type === 'revenue') {
     const hasCategories = rows.some(x => x.category);
     if (hasCategories) {
-      const cats = db.prepare('SELECT id, name FROM revenue_categories WHERE location_id = ?').all(req.locationId);
-      const byName = Object.fromEntries(cats.map(c => [c.name.toLowerCase(), c.id]));
+      const cats = db.prepare(
+        'SELECT id, name, commission_percent, commission_invoiced FROM revenue_categories WHERE location_id = ?').all(req.locationId);
+      const byName = Object.fromEntries(cats.map(c => [c.name.toLowerCase(), c]));
       const byDate = {};
       rows.forEach((row, i) => {
         if (badDate(row.date)) return errors.push(`Row ${i + 1}: bad date "${row.date}"`);
-        const cid = byName[String(row.category || '').toLowerCase().trim()];
-        if (!cid) return errors.push(`Row ${i + 1}: unknown revenue category "${row.category}"`);
-        (byDate[row.date] = byDate[row.date] || []).push({ category_id: cid, amount: num(row.amount) });
+        const cat = byName[String(row.category || '').toLowerCase().trim()];
+        if (!cat) return errors.push(`Row ${i + 1}: unknown revenue category "${row.category}"`);
+        const amount = num(row.amount);
+        (byDate[row.date] = byDate[row.date] || []).push({
+          category_id: cat.id, amount,
+          commission: cat.commission_percent ? amount * cat.commission_percent / 100 : 0,
+          commission_invoiced: cat.commission_invoiced
+        });
       });
       for (const [date, items] of Object.entries(byDate)) {
         const total = items.reduce((s, i) => s + i.amount, 0);
@@ -435,8 +458,9 @@ r.post('/import', requireOwner, checkLocation, (req, res) => {
           eid = Number(db.prepare('INSERT INTO revenue_entries (location_id, date, total) VALUES (?,?,?)')
             .run(req.locationId, date, total).lastInsertRowid);
         }
-        const ins = db.prepare('INSERT INTO revenue_items (entry_id, category_id, amount) VALUES (?,?,?)');
-        items.forEach(i => ins.run(eid, i.category_id, i.amount));
+        const ins = db.prepare(
+          'INSERT INTO revenue_items (entry_id, category_id, amount, commission_amount, commission_invoiced) VALUES (?,?,?,?,?)');
+        items.forEach(i => ins.run(eid, i.category_id, i.amount, i.commission, i.commission_invoiced));
         imported++;
       }
     } else {

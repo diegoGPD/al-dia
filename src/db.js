@@ -34,10 +34,14 @@ CREATE TABLE IF NOT EXISTS user_locations (
   PRIMARY KEY (user_id, location_id)
 );
 
+-- Revenue channels. Each can carry its own commission (e.g. Uber Eats 30%,
+-- card terminal 2.5%) and whether that commission is invoiced (facturada).
 CREATE TABLE IF NOT EXISTS revenue_categories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  commission_percent REAL,            -- % taken off this channel's sales (NULL/0 = none)
+  commission_invoiced INTEGER NOT NULL DEFAULT 1,
   position INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1
 );
@@ -73,11 +77,15 @@ CREATE TABLE IF NOT EXISTS revenue_entries (
   UNIQUE (location_id, date)
 );
 
+-- Commission is computed and stored at save time, so changing a channel's %
+-- later doesn't rewrite history.
 CREATE TABLE IF NOT EXISTS revenue_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   entry_id INTEGER NOT NULL REFERENCES revenue_entries(id) ON DELETE CASCADE,
   category_id INTEGER NOT NULL REFERENCES revenue_categories(id) ON DELETE CASCADE,
   amount REAL NOT NULL DEFAULT 0,
+  commission_amount REAL NOT NULL DEFAULT 0,
+  commission_invoiced INTEGER NOT NULL DEFAULT 0,
   UNIQUE (entry_id, category_id)
 );
 
@@ -120,14 +128,38 @@ CREATE INDEX IF NOT EXISTS idx_varcost_loc_date ON variable_costs(location_id, d
 CREATE INDEX IF NOT EXISTS idx_oneoff_loc_date ON oneoff_costs(location_id, date);
 `);
 
+// ---- Migrations for databases created before per-channel commissions ----
+function hasColumn(table, col) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some(r => r.name === col);
+}
+if (!hasColumn('revenue_categories', 'commission_percent')) {
+  db.exec(`ALTER TABLE revenue_categories ADD COLUMN commission_percent REAL;
+           ALTER TABLE revenue_categories ADD COLUMN commission_invoiced INTEGER NOT NULL DEFAULT 1;`);
+}
+if (!hasColumn('revenue_items', 'commission_amount')) {
+  db.exec(`ALTER TABLE revenue_items ADD COLUMN commission_amount REAL NOT NULL DEFAULT 0;
+           ALTER TABLE revenue_items ADD COLUMN commission_invoiced INTEGER NOT NULL DEFAULT 0;`);
+}
+
 // ---- Default categories for a new location (all fully editable/deletable) ----
+// Commission % values are editable starting points — adjust them in Settings
+// to match your actual contracts (they vary per agreement).
 const DEFAULTS = {
-  revenue: ['Food sales', 'Drink sales', 'Delivery / takeout'],
+  revenue: [
+    { name: 'Tarjeta Menú web',             commission_percent: 3,   commission_invoiced: 1 },
+    { name: 'Efectivo Menú web',            commission_percent: 0,   commission_invoiced: 1 },
+    { name: 'Tarjeta en tienda',            commission_percent: 2.5, commission_invoiced: 1 },
+    { name: 'Efectivo en tienda',           commission_percent: 0,   commission_invoiced: 1 },
+    { name: 'Banorte',                      commission_percent: 2.5, commission_invoiced: 1 },
+    { name: 'Órdenes de Didi Food',         commission_percent: 25,  commission_invoiced: 1 },
+    { name: 'Órdenes de Uber Eats',         commission_percent: 30,  commission_invoiced: 1 },
+    { name: 'Órdenes de Rappi',             commission_percent: 25,  commission_invoiced: 1 },
+    { name: 'Tarjeta Uber Daas Ecommerce',  commission_percent: 3,   commission_invoiced: 1 },
+    { name: 'Efectivo Uber Daas Ecommerce', commission_percent: 0,   commission_invoiced: 1 }
+  ],
   variable: [
     { name: 'Food & drink ingredients', entry_mode: 'percent', default_percent: 30, default_invoiced: 1, benchmark_tag: 'food' },
     { name: 'Packaging & to-go supplies', entry_mode: 'percent', default_percent: 2, default_invoiced: 1, benchmark_tag: null },
-    { name: 'Delivery app commissions', entry_mode: 'percent', default_percent: 8, default_invoiced: 1, benchmark_tag: null },
-    { name: 'Card processing fees', entry_mode: 'percent', default_percent: 3, default_invoiced: 1, benchmark_tag: null },
     { name: 'Extra staff / overtime', entry_mode: 'fixed', default_percent: null, default_invoiced: 0, benchmark_tag: 'labor' }
   ],
   recurring: [
@@ -142,8 +174,10 @@ const DEFAULTS = {
 };
 
 function seedCategories(locationId) {
-  const insRev = db.prepare('INSERT INTO revenue_categories (location_id, name, position) VALUES (?,?,?)');
-  DEFAULTS.revenue.forEach((name, i) => insRev.run(locationId, name, i));
+  const insRev = db.prepare(
+    'INSERT INTO revenue_categories (location_id, name, commission_percent, commission_invoiced, position) VALUES (?,?,?,?,?)');
+  DEFAULTS.revenue.forEach((c, i) =>
+    insRev.run(locationId, c.name, c.commission_percent, c.commission_invoiced, i));
 
   const insVar = db.prepare(`INSERT INTO variable_cost_categories
     (location_id, name, entry_mode, default_percent, default_invoiced, benchmark_tag, position)
@@ -161,5 +195,34 @@ function createLocation(name) {
   seedCategories(id);
   return id;
 }
+
+// One-time reseed: locations that still have the untouched pre-commission default
+// categories AND no logged data get the new channel-based defaults instead.
+(function reseedOldDefaults() {
+  const OLD_REVENUE = ['Food sales', 'Drink sales', 'Delivery / takeout'];
+  const OLD_VARIABLE = ['Food & drink ingredients', 'Packaging & to-go supplies',
+    'Delivery app commissions', 'Card processing fees', 'Extra staff / overtime'];
+  const sameSet = (a, b) => a.length === b.length && a.slice().sort().join('|') === b.slice().sort().join('|');
+
+  for (const loc of db.prepare('SELECT id FROM locations WHERE active = 1').all()) {
+    const hasRevData = db.prepare('SELECT COUNT(*) c FROM revenue_entries WHERE location_id = ?').get(loc.id).c > 0;
+    const revNames = db.prepare('SELECT name FROM revenue_categories WHERE location_id = ?').all(loc.id).map(r => r.name);
+    if (!hasRevData && sameSet(revNames, OLD_REVENUE)) {
+      db.prepare('DELETE FROM revenue_categories WHERE location_id = ?').run(loc.id);
+      const ins = db.prepare(
+        'INSERT INTO revenue_categories (location_id, name, commission_percent, commission_invoiced, position) VALUES (?,?,?,?,?)');
+      DEFAULTS.revenue.forEach((c, i) => ins.run(loc.id, c.name, c.commission_percent, c.commission_invoiced, i));
+    }
+    const hasVarData = db.prepare('SELECT COUNT(*) c FROM variable_costs WHERE location_id = ?').get(loc.id).c > 0;
+    const varNames = db.prepare('SELECT name FROM variable_cost_categories WHERE location_id = ?').all(loc.id).map(r => r.name);
+    if (!hasVarData && sameSet(varNames, OLD_VARIABLE)) {
+      db.prepare('DELETE FROM variable_cost_categories WHERE location_id = ?').run(loc.id);
+      const ins = db.prepare(`INSERT INTO variable_cost_categories
+        (location_id, name, entry_mode, default_percent, default_invoiced, benchmark_tag, position) VALUES (?,?,?,?,?,?,?)`);
+      DEFAULTS.variable.forEach((c, i) =>
+        ins.run(loc.id, c.name, c.entry_mode, c.default_percent, c.default_invoiced, c.benchmark_tag, i));
+    }
+  }
+})();
 
 module.exports = { db, DATA_DIR, createLocation };

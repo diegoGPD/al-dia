@@ -43,11 +43,11 @@ npm start        # http://localhost:3000
 ## Using it
 
 - **Home** — pick Day/Week/Month, arrow between periods. You get a status banner (Profitable / At break-even / Below break-even), money in/out, what you kept, break-even progress, a 30-day trend, and comparisons vs the previous period. For a period still in progress, costs accrue only up to today and the previous-period comparison covers the same number of days — so mid-month numbers are honest.
-- **Log → Sales** — date + total, under a minute. Optionally break it down by revenue category (the total then auto-sums).
+- **Log → Sales** — date + total, under a minute. Break it down by sales channel (Uber Eats, Rappi, card in store, cash…) and each channel's commission is calculated automatically and counted as a cost — with its own invoiced (facturado) status. Commission percentages live on each channel in Settings; changing a % only affects sales logged from then on, so history stays exact.
 - **Log → Daily costs** — one row per cost category, with the day's sales shown for reference. Percent-based categories suggest an amount from that day's sales; tap to accept or type your own. Invoiced toggles are pre-set from each category's default.
 - **Log → One-off cost** — date, description, amount, invoiced yes/no.
 - **Log → Recurring costs** (owner) — add rent, payroll, etc. once with how often you pay it (weekly / every 2 weeks / monthly). They spread into a daily equivalent automatically. Deleting one ends it from today so past numbers stay correct.
-- **Costs** — the breakdown view: recurring vs day-to-day vs one-offs, by category, and invoiced (facturado) vs not — totals and per-category.
+- **Costs** — the breakdown view: recurring vs day-to-day vs channel commissions vs one-offs, by category and by channel, and invoiced (facturado) vs not — totals and per-category.
 - **Settings** (owner) — manage categories in all three groups (add/rename/delete; categories with history are archived, not destroyed), locations, managers, and CSV import.
 
 ### CSV import

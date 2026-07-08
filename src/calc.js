@@ -79,12 +79,16 @@ function summary(locationId, start, end) {
      WHERE location_id = ? AND date BETWEEN ? AND ?`).get(locationId, start, end).t;
 
   const revByCat = db.prepare(
-    `SELECT c.name, COALESCE(SUM(ri.amount),0) amount
+    `SELECT c.name, COALESCE(SUM(ri.amount),0) amount,
+            COALESCE(SUM(ri.commission_amount),0) commission,
+            COALESCE(SUM(CASE WHEN ri.commission_invoiced = 1 THEN ri.commission_amount ELSE 0 END),0) commission_invoiced
      FROM revenue_items ri
      JOIN revenue_entries re ON re.id = ri.entry_id
      JOIN revenue_categories c ON c.id = ri.category_id
      WHERE re.location_id = ? AND re.date BETWEEN ? AND ?
      GROUP BY c.id ORDER BY c.position`).all(locationId, start, end);
+  const commissions = revByCat.reduce((s, r) => s + r.commission, 0);
+  const commissionsInvoiced = revByCat.reduce((s, r) => s + r.commission_invoiced, 0);
 
   const varRows = db.prepare(
     `SELECT c.name, c.benchmark_tag,
@@ -104,9 +108,9 @@ function summary(locationId, start, end) {
 
   const rec = recurringForRange(locationId, start, end);
 
-  const totalCosts = variable + oneoff + rec.total;
+  const totalCosts = variable + commissions + oneoff + rec.total;
   const profit = revenue - totalCosts;
-  const invoicedTotal = variableInvoiced + oneoffInvoiced + rec.invoiced;
+  const invoicedTotal = variableInvoiced + commissionsInvoiced + oneoffInvoiced + rec.invoiced;
 
   // Benchmark tag totals (food/labor from variable; labor/occupancy from recurring)
   const tag = { food: 0, labor: 0, occupancy: 0 };
@@ -119,6 +123,7 @@ function summary(locationId, start, end) {
     revenueByCategory: revByCat,
     costs: {
       variable, variableByCategory: varRows,
+      commissions, commissionsByChannel: revByCat.filter(r => r.commission > 0),
       recurring: rec.total, recurringByCategory: rec.byCategory,
       oneoff, oneoffItems: oneoffRows,
       total: totalCosts
@@ -127,11 +132,12 @@ function summary(locationId, start, end) {
       total: invoicedTotal,
       notInvoiced: totalCosts - invoicedTotal,
       variable: variableInvoiced,
+      commissions: commissionsInvoiced,
       recurring: rec.invoiced,
       oneoff: oneoffInvoiced
     },
     profit,
-    grossMargin: revenue > 0 ? (revenue - variable) / revenue : null,
+    grossMargin: revenue > 0 ? (revenue - variable - commissions) / revenue : null,
     netMargin: revenue > 0 ? profit / revenue : null,
     tagTotals: tag
   };
@@ -141,15 +147,21 @@ function summary(locationId, start, end) {
 // Fixed costs for the period F, variable-cost ratio v -> break-even sales = F / (1 - v).
 function breakEven(locationId, start, end, sum) {
   const fixed = sum.costs.recurring + sum.costs.oneoff;
+  // Costs that scale with sales: day-to-day costs + channel commissions.
+  const scaling = sum.costs.variable + sum.costs.commissions;
   let ratio = null, ratioSource = 'actual';
-  if (sum.revenue > 0 && sum.costs.variable > 0) {
-    ratio = sum.costs.variable / sum.revenue;
+  if (sum.revenue > 0 && scaling > 0) {
+    ratio = scaling / sum.revenue;
   } else {
-    // No sales/cost data yet: estimate from the default % of percent-based categories.
+    // No sales/cost data yet: estimate from category defaults
+    // (percent-based cost categories + average channel commission).
     const rows = db.prepare(
       `SELECT COALESCE(SUM(default_percent),0) p FROM variable_cost_categories
        WHERE location_id = ? AND active = 1 AND entry_mode = 'percent'`).get(locationId);
-    ratio = Math.min(rows.p / 100, 0.95);
+    const comm = db.prepare(
+      `SELECT COALESCE(AVG(commission_percent),0) p FROM revenue_categories
+       WHERE location_id = ? AND active = 1`).get(locationId);
+    ratio = Math.min((rows.p + comm.p) / 100, 0.95);
     ratioSource = 'estimated';
   }
   if (ratio >= 0.99) return { salesNeeded: null, ratio, ratioSource, fixed, gap: null, status: 'unprofitable_ratio' };
@@ -174,9 +186,15 @@ function trend(locationId, endDate, days = 30) {
   const offRows = db.prepare(
     `SELECT date, SUM(amount) a FROM oneoff_costs WHERE location_id = ? AND date BETWEEN ? AND ? GROUP BY date`)
     .all(locationId, start, endDate);
+  const commRows = db.prepare(
+    `SELECT re.date, SUM(ri.commission_amount) a FROM revenue_items ri
+     JOIN revenue_entries re ON re.id = ri.entry_id
+     WHERE re.location_id = ? AND re.date BETWEEN ? AND ? GROUP BY re.date`)
+    .all(locationId, start, endDate);
   const rev = Object.fromEntries(revRows.map(r => [r.date, r.total]));
   const vc = Object.fromEntries(varRows.map(r => [r.date, r.a]));
   const oo = Object.fromEntries(offRows.map(r => [r.date, r.a]));
+  const cm = Object.fromEntries(commRows.map(r => [r.date, r.a]));
   const items = recurringItems(locationId);
 
   const out = [];
@@ -186,7 +204,7 @@ function trend(locationId, endDate, days = 30) {
       .filter(it => it.start_date <= date && (!it.end_date || it.end_date >= date))
       .reduce((s, it) => s + dailyRate(it), 0);
     const revenue = rev[date] || 0;
-    const costs = (vc[date] || 0) + (oo[date] || 0) + recDay;
+    const costs = (vc[date] || 0) + (cm[date] || 0) + (oo[date] || 0) + recDay;
     out.push({ date, revenue, costs, profit: revenue - costs });
   }
   return out;

@@ -247,14 +247,17 @@
           <input type="number" inputmode="decimal" step="any" min="0" id="revTotal"
             value="${existing.entry ? existing.entry.total : ''}" placeholder="0" ${hasBreakdown ? 'readonly' : ''}></label>
         <details id="revBreakdown" ${hasBreakdown ? 'open' : ''}>
-          <summary>Break it down by type (optional)</summary>
+          <summary>Break it down by channel (recommended)</summary>
           <div class="cat-rows">
             ${cats.revenue.map(c => `
               <label class="cat-row">${esc(c.name)}
+                ${c.commission_percent ? `<span class="hint">− ${c.commission_percent}% commission${c.commission_invoiced ? ' (invoiced)' : ''}</span>` : ''}
                 <input type="number" inputmode="decimal" step="any" min="0" data-cat="${c.id}"
+                  data-pct="${c.commission_percent || 0}"
                   class="rev-item" value="${itemsByCat[c.id] ?? ''}" placeholder="0"></label>`).join('')}
           </div>
-          <div class="hint">The total above updates automatically from these.</div>
+          <div class="day-rev" id="commPreview" style="display:none"></div>
+          <div class="hint">The total above updates automatically. Commissions are calculated and counted as costs for you.</div>
         </details>
         <button class="btn primary full" type="submit">${existing.entry ? 'Update' : 'Save'} sales</button>
         ${existing.entry ? `<div class="hint center">Already logged for this day — saving replaces it.</div>` : ''}
@@ -266,14 +269,21 @@
     dateEl.onchange = () => { revDate = dateEl.value; render(); };
     const totalEl = app.querySelector('#revTotal');
     const items = [...app.querySelectorAll('.rev-item')];
+    const preview = app.querySelector('#commPreview');
     const sync = () => {
       const filled = items.filter(i => i.value !== '' && Number(i.value) !== 0);
       if (filled.length) {
-        totalEl.value = items.reduce((s, i) => s + (Number(i.value) || 0), 0);
+        const total = items.reduce((s, i) => s + (Number(i.value) || 0), 0);
+        totalEl.value = total;
         totalEl.readOnly = true;
-      } else totalEl.readOnly = false;
+        const comm = items.reduce((s, i) => s + (Number(i.value) || 0) * (Number(i.dataset.pct) || 0) / 100, 0);
+        preview.style.display = comm > 0 ? '' : 'none';
+        if (comm > 0) preview.innerHTML =
+          `Commissions on these sales: <strong>−${money(comm)}</strong> → you keep about <strong>${money(total - comm)}</strong> before other costs`;
+      } else { totalEl.readOnly = false; preview.style.display = 'none'; }
     };
     items.forEach(i => i.oninput = sync);
+    sync();
     app.querySelector('#revForm').onsubmit = async (e) => {
       e.preventDefault();
       const breakdown = items
@@ -504,7 +514,8 @@
       <div class="card">
         <div class="card-title">Where the money went — ${money(c.costs.total)} total</div>
         ${typeBar('Recurring (rent, payroll…)', c.costs.recurring, 'rec')}
-        ${typeBar('Day-to-day (food, fees…)', c.costs.variable, 'var')}
+        ${typeBar('Day-to-day (food, supplies…)', c.costs.variable, 'var')}
+        ${typeBar('Channel commissions (apps, cards…)', c.costs.commissions, 'comm')}
         ${typeBar('One-offs', c.costs.oneoff, 'one')}
       </div>
       <div class="card">
@@ -515,7 +526,14 @@
           <div class="inv-box warn"><div class="stat-label">Not invoiced</div>
             <div class="stat-value small">${money(inv.notInvoiced)}</div><div class="hint">${pct(1 - invPct)} of all costs</div></div>
         </div>
-        <div class="hint">Invoiced portion by type: day-to-day ${money(inv.variable)} · recurring ${money(inv.recurring)} · one-offs ${money(inv.oneoff)}</div>
+        <div class="hint">Invoiced portion by type: day-to-day ${money(inv.variable)} · commissions ${money(inv.commissions)} · recurring ${money(inv.recurring)} · one-offs ${money(inv.oneoff)}</div>
+      </div>
+      <div class="card"><div class="card-title">Commissions by channel</div>
+        ${c.costs.commissionsByChannel.length ? c.costs.commissionsByChannel.map(r => `
+          <div class="bd-row"><div class="bd-name">${esc(r.name)}<span class="hint"> · on ${money(r.amount)} sold</span></div>
+            <div class="bd-amt">${money(r.commission)}</div>
+            <div class="bd-inv hint">${r.commission > 0 ? Math.round(r.commission_invoiced / r.commission * 100) : 0}% inv.</div></div>`).join('')
+          : '<div class="hint">No commissions this period — they appear when you log sales broken down by channel.</div>'}
       </div>
       <div class="card"><div class="card-title">Day-to-day costs by category</div>${catRows(c.costs.variableByCategory, false)}</div>
       <div class="card"><div class="card-title">Recurring costs by category</div>${catRows(c.costs.recurringByCategory, true)}</div>
@@ -569,7 +587,10 @@
     return `
       <div class="card">
         <div class="card-title">Your categories</div>
-        ${group('Money in (revenue)', 'revenue', cats.revenue)}
+        ${group('Sales channels (money in)', 'revenue', cats.revenue, c =>
+          c.commission_percent
+            ? `${c.commission_percent}% commission · ${c.commission_invoiced ? 'invoiced' : 'not invoiced'}`
+            : 'No commission')}
         ${group('Day-to-day costs', 'variable', cats.variable, c =>
           `${c.entry_mode === 'percent' ? `Suggested as ${c.default_percent || 0}% of sales` : 'Entered as an amount'}
            · ${c.default_invoiced ? 'usually invoiced' : 'usually not invoiced'}
@@ -731,9 +752,13 @@
       : group === 'recurring' ? `
       <label>Counts as (for benchmarks)
         <select name="benchmark_tag"><option value="">Nothing special</option>
-          <option value="labor">Labor</option><option value="occupancy">Rent & occupancy</option></select></label>` : '';
+          <option value="labor">Labor</option><option value="occupancy">Rent & occupancy</option></select></label>`
+      : `
+      <label>Commission on this channel <span class="hint">(% taken off each sale — 0 for none)</span>
+        <input type="number" step="any" min="0" max="100" name="commission_percent" value="0"></label>
+      <label class="inv-toggle big"><input type="checkbox" name="commission_invoiced" checked>Commission is invoiced (facturada)</label>`;
     modal(`
-      <h3>New category</h3>
+      <h3>New ${group === 'revenue' ? 'sales channel' : 'category'}</h3>
       <form id="catForm">
         <label>Name<input name="name" required autofocus></label>
         ${extra}
@@ -755,6 +780,8 @@
             entry_mode: f.get('entry_mode') || undefined,
             default_percent: f.get('default_percent') || undefined,
             default_invoiced: f.get('default_invoiced') === 'on',
+            commission_percent: f.get('commission_percent') || 0,
+            commission_invoiced: f.get('commission_invoiced') === 'on',
             benchmark_tag: f.get('benchmark_tag') || null } });
           close(); toast('Category added'); render();
         } catch (err) { toast(err.message, true); }
@@ -762,11 +789,23 @@
     });
   }
 
-  function editCategory(group, id, currentName) {
+  async function editCategory(group, id, currentName) {
+    // Revenue channels also get commission settings in the edit dialog.
+    let commissionFields = '';
+    if (group === 'revenue') {
+      const cats = await api(`/categories?${qLoc()}`);
+      const cat = cats.revenue.find(c => c.id === id) || {};
+      commissionFields = `
+        <label>Commission on this channel <span class="hint">(% taken off each sale — 0 for none)</span>
+          <input type="number" step="any" min="0" max="100" name="commission_percent" value="${cat.commission_percent ?? 0}"></label>
+        <label class="inv-toggle big"><input type="checkbox" name="commission_invoiced" ${cat.commission_invoiced ? 'checked' : ''}>Commission is invoiced (facturada)</label>
+        <p class="hint">Changing the % only affects sales you log from now on — past days keep the commission they were saved with.</p>`;
+    }
     modal(`
-      <h3>Rename category</h3>
+      <h3>Edit ${group === 'revenue' ? 'sales channel' : 'category'}</h3>
       <form id="catForm">
         <label>Name<input name="name" value="${esc(currentName)}" required autofocus></label>
+        ${commissionFields}
         <div class="modal-actions">
           <button type="button" class="btn" data-close>Cancel</button>
           <button type="submit" class="btn primary">Save</button>
@@ -775,8 +814,13 @@
       wrap.querySelector('[data-close]').onclick = close;
       wrap.querySelector('#catForm').onsubmit = async e => {
         e.preventDefault();
-        await api(`/categories/${group}/${id}?${qLoc()}`, { method: 'PUT', body: {
-          location_id: state.locationId, name: new FormData(e.target).get('name') } });
+        const f = new FormData(e.target);
+        const body = { location_id: state.locationId, name: f.get('name') };
+        if (group === 'revenue') {
+          body.commission_percent = f.get('commission_percent') || 0;
+          body.commission_invoiced = f.get('commission_invoiced') === 'on';
+        }
+        await api(`/categories/${group}/${id}?${qLoc()}`, { method: 'PUT', body });
         close(); toast('Saved'); render();
       };
     });
