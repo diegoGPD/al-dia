@@ -114,6 +114,38 @@ CREATE TABLE IF NOT EXISTS recurring_costs (
   active INTEGER NOT NULL DEFAULT 1
 );
 
+-- Money accounts: where money actually sits (cash, banks, delivery apps owing you).
+CREATE TABLE IF NOT EXISTS accounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  opening_balance REAL NOT NULL DEFAULT 0,
+  position INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1
+);
+
+-- Optional split of a day's revenue across accounts (independent of the
+-- sales-channel breakdown).
+CREATE TABLE IF NOT EXISTS revenue_account_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entry_id INTEGER NOT NULL REFERENCES revenue_entries(id) ON DELETE CASCADE,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  amount REAL NOT NULL DEFAULT 0,
+  UNIQUE (entry_id, account_id)
+);
+
+-- Moving money between accounts (e.g. depositing cash at the bank).
+CREATE TABLE IF NOT EXISTS transfers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  from_account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  to_account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  amount REAL NOT NULL,
+  note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_transfers_loc_date ON transfers(location_id, date);
+
 -- Employee roster (per location)
 CREATE TABLE IF NOT EXISTS employees (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -164,6 +196,12 @@ if (!hasColumn('revenue_items', 'commission_amount')) {
   db.exec(`ALTER TABLE revenue_items ADD COLUMN commission_amount REAL NOT NULL DEFAULT 0;
            ALTER TABLE revenue_items ADD COLUMN commission_invoiced INTEGER NOT NULL DEFAULT 0;`);
 }
+// "Paid from" account tagging on every cost type (optional, nullable).
+for (const table of ['variable_costs', 'oneoff_costs', 'recurring_costs']) {
+  if (!hasColumn(table, 'account_id')) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN account_id INTEGER REFERENCES accounts(id)`);
+  }
+}
 
 // ---- Default categories for a new location (all fully editable/deletable) ----
 // Commission % values are editable starting points — adjust them in Settings
@@ -186,6 +224,7 @@ const DEFAULTS = {
     { name: 'Packaging & to-go supplies', entry_mode: 'percent', default_percent: 2, default_invoiced: 1, benchmark_tag: null },
     { name: 'Extra staff / overtime', entry_mode: 'fixed', default_percent: null, default_invoiced: 0, benchmark_tag: 'labor' }
   ],
+  accounts: ['Cash', 'Bank 1', 'Bank 2', 'Delivery apps'],
   recurring: [
     { name: 'Rent', benchmark_tag: 'occupancy' },
     { name: 'Salaries (base payroll)', benchmark_tag: 'labor' },
@@ -211,6 +250,9 @@ function seedCategories(locationId) {
 
   const insRec = db.prepare('INSERT INTO recurring_cost_categories (location_id, name, benchmark_tag, position) VALUES (?,?,?,?)');
   DEFAULTS.recurring.forEach((c, i) => insRec.run(locationId, c.name, c.benchmark_tag, i));
+
+  const insAcc = db.prepare('INSERT INTO accounts (location_id, name, position) VALUES (?,?,?)');
+  DEFAULTS.accounts.forEach((name, i) => insAcc.run(locationId, name, i));
 }
 
 function createLocation(name) {
@@ -229,6 +271,11 @@ function createLocation(name) {
   const sameSet = (a, b) => a.length === b.length && a.slice().sort().join('|') === b.slice().sort().join('|');
 
   for (const loc of db.prepare('SELECT id FROM locations WHERE active = 1').all()) {
+    // Locations created before the accounts feature get the default accounts.
+    if (db.prepare('SELECT COUNT(*) c FROM accounts WHERE location_id = ?').get(loc.id).c === 0) {
+      const insAcc = db.prepare('INSERT INTO accounts (location_id, name, position) VALUES (?,?,?)');
+      DEFAULTS.accounts.forEach((name, i) => insAcc.run(loc.id, name, i));
+    }
     const hasRevData = db.prepare('SELECT COUNT(*) c FROM revenue_entries WHERE location_id = ?').get(loc.id).c > 0;
     const revNames = db.prepare('SELECT name FROM revenue_categories WHERE location_id = ?').all(loc.id).map(r => r.name);
     if (!hasRevData && sameSet(revNames, OLD_REVENUE)) {

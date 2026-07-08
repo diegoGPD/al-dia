@@ -129,7 +129,8 @@ r.delete('/users/:id', requireOwner, (req, res) => {
 const CAT_TABLES = {
   revenue: 'revenue_categories',
   variable: 'variable_cost_categories',
-  recurring: 'recurring_cost_categories'
+  recurring: 'recurring_cost_categories',
+  accounts: 'accounts'
 };
 
 r.get('/categories', checkLocation, (req, res) => {
@@ -163,6 +164,10 @@ r.post('/categories/:group', requireOwner, checkLocation, (req, res) => {
       `INSERT INTO recurring_cost_categories (location_id, name, benchmark_tag, position) VALUES (?,?,?,?)`)
       .run(req.locationId, name,
         ['labor', 'occupancy'].includes(req.body.benchmark_tag) ? req.body.benchmark_tag : null, pos);
+  } else if (req.params.group === 'accounts') {
+    result = db.prepare(
+      `INSERT INTO accounts (location_id, name, opening_balance, position) VALUES (?,?,?,?)`)
+      .run(req.locationId, name, num(req.body.opening_balance), pos);
   } else {
     result = db.prepare(
       `INSERT INTO revenue_categories (location_id, name, commission_percent, commission_invoiced, position) VALUES (?,?,?,?,?)`)
@@ -200,6 +205,11 @@ r.put('/categories/:group/:id', requireOwner, checkLocation, (req, res) => {
           ? (['labor', 'occupancy'].includes(req.body.benchmark_tag) ? req.body.benchmark_tag : null)
           : cat.benchmark_tag,
         id);
+  } else if (req.params.group === 'accounts') {
+    db.prepare(`UPDATE accounts SET name=?, opening_balance=? WHERE id=?`)
+      .run(name,
+        req.body.opening_balance !== undefined ? num(req.body.opening_balance) : cat.opening_balance,
+        id);
   } else {
     db.prepare(`UPDATE revenue_categories SET name=?, commission_percent=?, commission_invoiced=? WHERE id=?`)
       .run(name,
@@ -217,7 +227,12 @@ r.delete('/categories/:group/:id', requireOwner, checkLocation, (req, res) => {
   const refs = {
     revenue: 'SELECT COUNT(*) c FROM revenue_items WHERE category_id = ?',
     variable: 'SELECT COUNT(*) c FROM variable_costs WHERE category_id = ?',
-    recurring: 'SELECT COUNT(*) c FROM recurring_costs WHERE category_id = ?'
+    recurring: 'SELECT COUNT(*) c FROM recurring_costs WHERE category_id = ?',
+    accounts: `SELECT (SELECT COUNT(*) FROM revenue_account_items WHERE account_id = ?1) +
+      (SELECT COUNT(*) FROM variable_costs WHERE account_id = ?1) +
+      (SELECT COUNT(*) FROM oneoff_costs WHERE account_id = ?1) +
+      (SELECT COUNT(*) FROM recurring_costs WHERE account_id = ?1) +
+      (SELECT COUNT(*) FROM transfers WHERE from_account_id = ?1 OR to_account_id = ?1) c`
   };
   const used = db.prepare(refs[req.params.group]).get(id).c > 0;
   if (used) db.prepare(`UPDATE ${table} SET active = 0 WHERE id = ? AND location_id = ?`).run(id, req.locationId);
@@ -232,12 +247,14 @@ r.get('/revenue', checkLocation, (req, res) => {
   const entry = db.prepare('SELECT * FROM revenue_entries WHERE location_id = ? AND date = ?').get(req.locationId, date);
   const items = entry
     ? db.prepare('SELECT category_id, amount, commission_amount, commission_invoiced FROM revenue_items WHERE entry_id = ?').all(entry.id) : [];
-  res.json({ entry: entry || null, items });
+  const accountItems = entry
+    ? db.prepare('SELECT account_id, amount FROM revenue_account_items WHERE entry_id = ?').all(entry.id) : [];
+  res.json({ entry: entry || null, items, accountItems });
 });
 
 // Upsert a day's revenue (with optional category breakdown).
 r.put('/revenue', checkLocation, (req, res) => {
-  const { date, total, items, note } = req.body;
+  const { date, total, items, note, accounts } = req.body;
   if (badDate(date)) return res.status(400).json({ error: 'Invalid date' });
   const breakdown = Array.isArray(items) ? items.filter(i => num(i.amount) !== 0) : [];
   const finalTotal = breakdown.length ? breakdown.reduce((s, i) => s + num(i.amount), 0) : num(total);
@@ -249,6 +266,7 @@ r.put('/revenue', checkLocation, (req, res) => {
     entryId = existing.id;
     db.prepare('UPDATE revenue_entries SET total = ?, note = ? WHERE id = ?').run(finalTotal, note || null, entryId);
     db.prepare('DELETE FROM revenue_items WHERE entry_id = ?').run(entryId);
+    db.prepare('DELETE FROM revenue_account_items WHERE entry_id = ?').run(entryId);
   } else {
     entryId = Number(db.prepare(
       'INSERT INTO revenue_entries (location_id, date, total, note) VALUES (?,?,?,?)')
@@ -267,6 +285,15 @@ r.put('/revenue', checkLocation, (req, res) => {
     commissions += commission;
     ins.run(entryId, Number(i.category_id), num(i.amount), commission, cat ? cat.commission_invoiced : 0);
   });
+  // Optional split across money accounts (independent of the channel breakdown).
+  if (Array.isArray(accounts)) {
+    const valid = new Set(db.prepare('SELECT id FROM accounts WHERE location_id = ?')
+      .all(req.locationId).map(a => a.id));
+    const insAcc = db.prepare(
+      'INSERT INTO revenue_account_items (entry_id, account_id, amount) VALUES (?,?,?)');
+    accounts.filter(a => valid.has(Number(a.account_id)) && num(a.amount) !== 0)
+      .forEach(a => insAcc.run(entryId, Number(a.account_id), num(a.amount)));
+  }
   res.json({ ok: true, total: finalTotal, commissions });
 });
 
@@ -285,9 +312,11 @@ r.get('/costs/day', checkLocation, (req, res) => {
     `SELECT * FROM variable_cost_categories WHERE location_id = ? AND active = 1 ORDER BY position, id`)
     .all(req.locationId);
   const existing = db.prepare(
-    `SELECT category_id, amount, invoiced FROM variable_costs WHERE location_id = ? AND date = ?`)
+    `SELECT category_id, amount, invoiced, account_id FROM variable_costs WHERE location_id = ? AND date = ?`)
     .all(req.locationId, date);
-  res.json({ dayRevenue: revenue ? revenue.total : null, categories, existing });
+  const accounts = db.prepare(
+    'SELECT id, name FROM accounts WHERE location_id = ? AND active = 1 ORDER BY position, id').all(req.locationId);
+  res.json({ dayRevenue: revenue ? revenue.total : null, categories, existing, accounts });
 });
 
 // Bulk upsert one day's variable costs: rows = [{category_id, amount, invoiced}]
@@ -296,12 +325,14 @@ r.put('/costs/day', checkLocation, (req, res) => {
   if (badDate(date) || !Array.isArray(rows)) return res.status(400).json({ error: 'Invalid request' });
   const del = db.prepare('DELETE FROM variable_costs WHERE location_id = ? AND date = ? AND category_id = ?');
   const up = db.prepare(
-    `INSERT INTO variable_costs (location_id, date, category_id, amount, invoiced) VALUES (?,?,?,?,?)
-     ON CONFLICT (location_id, date, category_id) DO UPDATE SET amount = excluded.amount, invoiced = excluded.invoiced`);
+    `INSERT INTO variable_costs (location_id, date, category_id, amount, invoiced, account_id) VALUES (?,?,?,?,?,?)
+     ON CONFLICT (location_id, date, category_id) DO UPDATE
+       SET amount = excluded.amount, invoiced = excluded.invoiced, account_id = excluded.account_id`);
   for (const row of rows) {
     const amt = num(row.amount);
     if (amt === 0) del.run(req.locationId, date, Number(row.category_id));
-    else up.run(req.locationId, date, Number(row.category_id), amt, bool01(row.invoiced));
+    else up.run(req.locationId, date, Number(row.category_id), amt, bool01(row.invoiced),
+      row.account_id ? Number(row.account_id) : null);
   }
   res.json({ ok: true });
 });
@@ -318,14 +349,15 @@ r.get('/recurring', checkLocation, (req, res) => {
 });
 
 r.post('/recurring', requireOwner, checkLocation, (req, res) => {
-  const { category_id, description, amount, frequency, invoiced, start_date } = req.body;
+  const { category_id, description, amount, frequency, invoiced, start_date, account_id } = req.body;
   if (!category_id || !description || num(amount) <= 0 || !['weekly', 'biweekly', 'monthly'].includes(frequency))
     return res.status(400).json({ error: 'Category, description, amount and frequency are required' });
   const start = !badDate(start_date) ? start_date : new Date().toISOString().slice(0, 10);
   const { lastInsertRowid } = db.prepare(
-    `INSERT INTO recurring_costs (location_id, category_id, description, amount, frequency, invoiced, start_date)
-     VALUES (?,?,?,?,?,?,?)`)
-    .run(req.locationId, Number(category_id), description.trim(), num(amount), frequency, bool01(invoiced), start);
+    `INSERT INTO recurring_costs (location_id, category_id, description, amount, frequency, invoiced, start_date, account_id)
+     VALUES (?,?,?,?,?,?,?,?)`)
+    .run(req.locationId, Number(category_id), description.trim(), num(amount), frequency, bool01(invoiced), start,
+      account_id ? Number(account_id) : null);
   res.json({ id: Number(lastInsertRowid) });
 });
 
@@ -335,7 +367,7 @@ r.put('/recurring/:id', requireOwner, checkLocation, (req, res) => {
   if (!it) return res.status(404).json({ error: 'Not found' });
   const b = req.body;
   db.prepare(
-    `UPDATE recurring_costs SET category_id=?, description=?, amount=?, frequency=?, invoiced=?, start_date=?, end_date=? WHERE id=?`)
+    `UPDATE recurring_costs SET category_id=?, description=?, amount=?, frequency=?, invoiced=?, start_date=?, end_date=?, account_id=? WHERE id=?`)
     .run(
       b.category_id !== undefined ? Number(b.category_id) : it.category_id,
       b.description !== undefined ? String(b.description).trim() : it.description,
@@ -344,6 +376,7 @@ r.put('/recurring/:id', requireOwner, checkLocation, (req, res) => {
       b.invoiced !== undefined ? bool01(b.invoiced) : it.invoiced,
       !badDate(b.start_date) ? b.start_date : it.start_date,
       b.end_date === null ? null : (!badDate(b.end_date) ? b.end_date : it.end_date),
+      b.account_id !== undefined ? (b.account_id ? Number(b.account_id) : null) : it.account_id,
       it.id);
   res.json({ ok: true });
 });
@@ -369,12 +402,13 @@ r.get('/oneoff', checkLocation, (req, res) => {
 });
 
 r.post('/oneoff', checkLocation, (req, res) => {
-  const { date, description, amount, invoiced } = req.body;
+  const { date, description, amount, invoiced, account_id } = req.body;
   if (badDate(date) || !description || num(amount) <= 0)
     return res.status(400).json({ error: 'Date, description and amount are required' });
   const { lastInsertRowid } = db.prepare(
-    'INSERT INTO oneoff_costs (location_id, date, description, amount, invoiced) VALUES (?,?,?,?,?)')
-    .run(req.locationId, date, description.trim(), num(amount), bool01(invoiced));
+    'INSERT INTO oneoff_costs (location_id, date, description, amount, invoiced, account_id) VALUES (?,?,?,?,?,?)')
+    .run(req.locationId, date, description.trim(), num(amount), bool01(invoiced),
+      account_id ? Number(account_id) : null);
   res.json({ id: Number(lastInsertRowid) });
 });
 
@@ -417,6 +451,43 @@ r.get('/dashboard', checkLocation, (req, res) => {
     benchmarks: calc.benchmarks(current),
     trend: calc.trend(req.locationId, end > anchor ? anchor : end, 30)
   });
+});
+
+// ============ money accounts ============
+r.get('/accounts-view', checkLocation, (req, res) => {
+  const granularity = ['day', 'week', 'month'].includes(req.query.granularity) ? req.query.granularity : 'day';
+  const anchor = !badDate(req.query.date) ? req.query.date : new Date().toISOString().slice(0, 10);
+  const bounds = calc.periodBounds(granularity, anchor);
+  const end = bounds.end > anchor && bounds.start <= anchor ? anchor : bounds.end;
+  const view = calc.accountsView(req.locationId, bounds.start, end);
+  view.granularity = granularity; view.anchor = anchor;
+  view.start = bounds.start; view.end = end; view.periodEnd = bounds.end;
+  view.transfers = db.prepare(
+    `SELECT t.*, fa.name from_name, ta.name to_name FROM transfers t
+     JOIN accounts fa ON fa.id = t.from_account_id
+     JOIN accounts ta ON ta.id = t.to_account_id
+     WHERE t.location_id = ? AND t.date BETWEEN ? AND ? ORDER BY t.date DESC, t.id DESC`)
+    .all(req.locationId, bounds.start, end);
+  res.json(view);
+});
+
+r.post('/transfers', checkLocation, (req, res) => {
+  const { date, from_account_id, to_account_id, amount, note } = req.body;
+  if (badDate(date) || num(amount) <= 0) return res.status(400).json({ error: 'Date and amount are required' });
+  const from = Number(from_account_id), to = Number(to_account_id);
+  if (!from || !to || from === to) return res.status(400).json({ error: 'Pick two different accounts' });
+  const valid = new Set(db.prepare('SELECT id FROM accounts WHERE location_id = ?').all(req.locationId).map(a => a.id));
+  if (!valid.has(from) || !valid.has(to)) return res.status(404).json({ error: 'Account not found' });
+  const { lastInsertRowid } = db.prepare(
+    'INSERT INTO transfers (location_id, date, from_account_id, to_account_id, amount, note) VALUES (?,?,?,?,?,?)')
+    .run(req.locationId, date, from, to, num(amount), (note || '').trim() || null);
+  res.json({ id: Number(lastInsertRowid) });
+});
+
+r.delete('/transfers/:id', checkLocation, (req, res) => {
+  db.prepare('DELETE FROM transfers WHERE id = ? AND location_id = ?')
+    .run(Number(req.params.id), req.locationId);
+  res.json({ ok: true });
 });
 
 // ============ employees ============

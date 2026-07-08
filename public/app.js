@@ -99,7 +99,7 @@ const App = (() => {
     <nav class="bottombar">
       ${NAV_ITEMS.map(n => {
         const isActive = n.route === active || (n.route === 'log' && LOG_ROUTES.includes(active)) ||
-          (n.route === 'breakdown' && active === 'breakdown');
+          (n.route === 'breakdown' && active === 'accounts');
         return `<a href="#/${n.route}" class="nav-item ${isActive ? 'active' : ''}">
           <span class="nav-icon">${n.icon}</span><span>${n.label}</span></a>`;
       }).join('')}

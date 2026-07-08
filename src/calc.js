@@ -210,6 +210,74 @@ function trend(locationId, endDate, days = 30) {
   return out;
 }
 
+// ---------- money accounts ----------
+// Movement for every account over [start, end]: money in (tagged revenue +
+// incoming transfers), money out (tagged costs + outgoing transfers).
+function accountMovement(locationId, start, end) {
+  const q = (sql) => Object.fromEntries(
+    db.prepare(sql).all(locationId, start, end).map(r => [r.k, r.v]));
+  const revIn = q(`SELECT rai.account_id k, COALESCE(SUM(rai.amount),0) v
+    FROM revenue_account_items rai JOIN revenue_entries re ON re.id = rai.entry_id
+    WHERE re.location_id = ? AND re.date BETWEEN ? AND ? GROUP BY rai.account_id`);
+  const varOut = q(`SELECT account_id k, COALESCE(SUM(amount),0) v FROM variable_costs
+    WHERE location_id = ? AND date BETWEEN ? AND ? AND account_id IS NOT NULL GROUP BY account_id`);
+  const oneOut = q(`SELECT account_id k, COALESCE(SUM(amount),0) v FROM oneoff_costs
+    WHERE location_id = ? AND date BETWEEN ? AND ? AND account_id IS NOT NULL GROUP BY account_id`);
+  const trIn = q(`SELECT to_account_id k, COALESCE(SUM(amount),0) v FROM transfers
+    WHERE location_id = ? AND date BETWEEN ? AND ? GROUP BY to_account_id`);
+  const trOut = q(`SELECT from_account_id k, COALESCE(SUM(amount),0) v FROM transfers
+    WHERE location_id = ? AND date BETWEEN ? AND ? GROUP BY from_account_id`);
+  // recurring: daily-equivalent for items tagged to an account
+  const recOut = {};
+  for (const it of recurringItems(locationId)) {
+    if (!it.account_id) continue;
+    const amt = dailyRate(it) * overlapDays(it, start, end);
+    if (amt > 0) recOut[it.account_id] = (recOut[it.account_id] || 0) + amt;
+  }
+  return { revIn, varOut, oneOut, recOut, trIn, trOut };
+}
+
+function accountsView(locationId, start, end) {
+  const accounts = db.prepare(
+    'SELECT * FROM accounts WHERE location_id = ? AND active = 1 ORDER BY position, id').all(locationId);
+  const period = accountMovement(locationId, start, end);
+  const prior = accountMovement(locationId, '1900-01-01', addDays(start, -1));
+
+  const rows = accounts.map(a => {
+    const g = (m) => m[a.id] || 0;
+    const moneyIn = g(period.revIn) + g(period.trIn);
+    const moneyOut = g(period.varOut) + g(period.oneOut) + g(period.recOut) + g(period.trOut);
+    const priorNet = (g(prior.revIn) + g(prior.trIn)) -
+      (g(prior.varOut) + g(prior.oneOut) + g(prior.recOut) + g(prior.trOut));
+    return {
+      id: a.id, name: a.name, opening_balance: a.opening_balance,
+      moneyIn, moneyOut, net: moneyIn - moneyOut,
+      balance: a.opening_balance + priorNet + (moneyIn - moneyOut)
+    };
+  });
+
+  // Anything not tagged to an account, so totals always tie out with the dashboard.
+  const sum = summary(locationId, start, end);
+  const taggedIn = rows.reduce((s, r) => s + (period.revIn[r.id] || 0), 0);
+  const taggedOut = Object.values(period.varOut).reduce((s, v) => s + v, 0) +
+    Object.values(period.oneOut).reduce((s, v) => s + v, 0) +
+    Object.values(period.recOut).reduce((s, v) => s + v, 0);
+  // Commissions are never account-tagged (the platforms deduct them before paying out).
+  const costsExclCommissions = sum.costs.total - sum.costs.commissions;
+  return {
+    accounts: rows,
+    unassigned: {
+      moneyIn: Math.max(0, sum.revenue - taggedIn),
+      moneyOut: Math.max(0, costsExclCommissions - taggedOut)
+    },
+    totals: {
+      revenue: sum.revenue,
+      costs: costsExclCommissions,
+      commissionsNote: sum.costs.commissions
+    }
+  };
+}
+
 // ---------- general industry benchmarks (typical full-service/quick-service ranges) ----------
 const BENCHMARKS = [
   { key: 'food',      label: 'Food & drink cost', low: 0.28, high: 0.35 },
@@ -245,5 +313,5 @@ function benchmarks(sum) {
 module.exports = {
   periodBounds, prevPeriodAnchor, addDays,
   summary, breakEven, trend, benchmarks,
-  recurringDailyNow, dailyRate, recurringForRange
+  recurringDailyNow, dailyRate, recurringForRange, accountsView
 };

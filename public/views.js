@@ -245,6 +245,8 @@
     ]);
     const itemsByCat = Object.fromEntries(existing.items.map(i => [i.category_id, i.amount]));
     const hasBreakdown = existing.items.length > 0;
+    const accByAcc = Object.fromEntries((existing.accountItems || []).map(i => [i.account_id, i.amount]));
+    const hasAccSplit = (existing.accountItems || []).length > 0;
     return `
       <h2 class="page-title">Log sales</h2>
       <form id="revForm" class="card">
@@ -264,6 +266,16 @@
           </div>
           <div class="day-rev" id="commPreview" style="display:none"></div>
           <div class="hint">The total above updates automatically. Commissions are calculated and counted as costs for you.</div>
+        </details>
+        <details id="accSplit" ${hasAccSplit ? 'open' : ''}>
+          <summary>Where did the money land? (optional)</summary>
+          <div class="cat-rows">
+            ${cats.accounts.map(a => `
+              <label class="cat-row">${esc(a.name)}
+                <input type="number" inputmode="decimal" step="any" min="0" data-acc="${a.id}"
+                  class="acc-item" value="${accByAcc[a.id] ?? ''}" placeholder="0"></label>`).join('')}
+          </div>
+          <div class="hint" id="accRemaining"></div>
         </details>
         <button class="btn primary full" type="submit">${existing.entry ? 'Update' : 'Save'} sales</button>
         ${existing.entry ? `<div class="hint center">Already logged for this day — saving replaces it.</div>` : ''}
@@ -290,15 +302,37 @@
     };
     items.forEach(i => i.oninput = sync);
     sync();
+
+    // account split helper: show how much of the total is still unassigned
+    const accItems = [...app.querySelectorAll('.acc-item')];
+    const accRemaining = app.querySelector('#accRemaining');
+    const syncAcc = () => {
+      const assigned = accItems.reduce((s, i) => s + (Number(i.value) || 0), 0);
+      const total = Number(totalEl.value) || 0;
+      if (assigned === 0) { accRemaining.textContent = 'Split the total across your accounts — anything left over shows as "unassigned".'; return; }
+      const left = total - assigned;
+      accRemaining.textContent = Math.abs(left) < 0.005
+        ? '✓ Fully assigned'
+        : left > 0 ? `${money(left)} still unassigned`
+        : `⚠ Assigned ${money(-left)} more than the day's total`;
+    };
+    accItems.forEach(i => i.oninput = syncAcc);
+    totalEl.addEventListener('input', syncAcc);
+    items.forEach(i => i.addEventListener('input', syncAcc));
+    syncAcc();
+
     app.querySelector('#revForm').onsubmit = async (e) => {
       e.preventDefault();
       const breakdown = items
         .filter(i => i.value !== '' && Number(i.value) !== 0)
         .map(i => ({ category_id: Number(i.dataset.cat), amount: Number(i.value) }));
+      const accounts = accItems
+        .filter(i => i.value !== '' && Number(i.value) !== 0)
+        .map(i => ({ account_id: Number(i.dataset.acc), amount: Number(i.value) }));
       try {
         const r = await api('/revenue', { method: 'PUT', body: {
           location_id: state.locationId, date: dateEl.value,
-          total: Number(totalEl.value) || 0, items: breakdown } });
+          total: Number(totalEl.value) || 0, items: breakdown, accounts } });
         toast(`Sales saved — ${money(r.total)}`);
         nav('dashboard');
       } catch (err) { toast(err.message, true); }
@@ -336,9 +370,15 @@
                   ${c.entry_mode === 'percent' ? `<span class="hint">~${c.default_percent || 0}% of sales</span>` : ''}</span>
                 <label class="inv-toggle"><input type="checkbox" class="cost-inv" ${invoiced ? 'checked' : ''}>Invoiced</label>
               </div>
-              <input type="number" inputmode="decimal" step="any" min="0" class="cost-amt"
-                value="${value}" placeholder="${suggested !== null ? suggested : '0'}"
-                ${suggested !== null ? `data-suggest="${suggested}"` : ''}>
+              <div class="cost-inputs">
+                <input type="number" inputmode="decimal" step="any" min="0" class="cost-amt"
+                  value="${value}" placeholder="${suggested !== null ? suggested : '0'}"
+                  ${suggested !== null ? `data-suggest="${suggested}"` : ''}>
+                <select class="cost-acc" aria-label="Paid from">
+                  <option value="">Paid from…</option>
+                  ${d.accounts.map(a => `<option value="${a.id}" ${ex && ex.account_id === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}
+                </select>
+              </div>
               ${suggested !== null && !ex ? `<button type="button" class="btn tiny use-suggest">Use suggestion: ${money(suggested)}</button>` : ''}
             </div>`;
           }).join('')}
@@ -361,7 +401,8 @@
       const rows = [...app.querySelectorAll('.cost-row')].map(row => ({
         category_id: Number(row.dataset.cat),
         amount: Number(row.querySelector('.cost-amt').value) || 0,
-        invoiced: row.querySelector('.cost-inv').checked
+        invoiced: row.querySelector('.cost-inv').checked,
+        account_id: Number(row.querySelector('.cost-acc').value) || null
       }));
       try {
         await api('/costs/day', { method: 'PUT', body: { location_id: state.locationId, date: dateEl.value, rows } });
@@ -376,13 +417,21 @@
   // ======================================================================
   registerRoute('oneoff', async () => {
     const start = today().slice(0, 8) + '01';
-    const list = await api(`/oneoff?${qLoc()}&start=${addDays(start, -60)}&end=${today()}`);
+    const [list, cats] = await Promise.all([
+      api(`/oneoff?${qLoc()}&start=${addDays(start, -60)}&end=${today()}`),
+      api(`/categories?${qLoc()}`)
+    ]);
     return `
       <h2 class="page-title">One-off costs</h2>
       <form id="oneoffForm" class="card">
         <label>Date<input type="date" name="date" value="${today()}" max="${today()}" required></label>
         <label>What was it?<input name="description" required placeholder="Fridge repair, health permit…"></label>
-        <label>Amount<input type="number" inputmode="decimal" step="any" min="0.01" name="amount" required placeholder="0"></label>
+        <div class="row2">
+          <label>Amount<input type="number" inputmode="decimal" step="any" min="0.01" name="amount" required placeholder="0"></label>
+          <label>Paid from <span class="hint">(optional)</span>
+            <select name="account_id"><option value="">—</option>
+              ${cats.accounts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select></label>
+        </div>
         <label class="inv-toggle big"><input type="checkbox" name="invoiced">This cost is invoiced (facturado)</label>
         <button class="btn primary full" type="submit">Save cost</button>
       </form>
@@ -406,7 +455,8 @@
         await api('/oneoff', { method: 'POST', body: {
           location_id: state.locationId, date: f.get('date'),
           description: f.get('description'), amount: Number(f.get('amount')),
-          invoiced: f.get('invoiced') === 'on' } });
+          invoiced: f.get('invoiced') === 'on',
+          account_id: Number(f.get('account_id')) || null } });
         toast('Cost saved'); render();
       } catch (err) { toast(err.message, true); }
     };
@@ -451,6 +501,9 @@
               <option value="weekly">Weekly</option>
             </select></label>
         </div>
+        <label>Paid from <span class="hint">(optional)</span>
+          <select name="account_id"><option value="">—</option>
+            ${cats.accounts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select></label>
         <label class="inv-toggle big"><input type="checkbox" name="invoiced">Invoiced (facturado)</label>
         <button class="btn primary full" type="submit">Add recurring cost</button>
       </form>
@@ -477,6 +530,7 @@
           location_id: state.locationId, category_id: Number(f.get('category_id')),
           description: f.get('description'), amount: Number(f.get('amount')),
           frequency: f.get('frequency'), invoiced: f.get('invoiced') === 'on',
+          account_id: Number(f.get('account_id')) || null,
           start_date: today() } });
         toast('Recurring cost added'); render();
       } catch (err) { toast(err.message, true); }
@@ -491,6 +545,13 @@
   // ======================================================================
   // Costs breakdown
   // ======================================================================
+  // Sub-tabs shared by the Costs and Accounts pages
+  const moneySubnav = (active) => `
+    <div class="seg subnav">
+      <button class="seg-btn ${active === 'breakdown' ? 'on' : ''}" onclick="location.hash='#/breakdown'">Costs</button>
+      <button class="seg-btn ${active === 'accounts' ? 'on' : ''}" onclick="location.hash='#/accounts'">Accounts</button>
+    </div>`;
+
   registerRoute('breakdown', async () => {
     const d = await fetchDashboard();
     const c = d.current;
@@ -516,6 +577,7 @@
     };
 
     return `
+      ${moneySubnav('breakdown')}
       ${periodBar(d)}
       <div class="card">
         <div class="card-title">Where the money went — ${money(c.costs.total)} total</div>
@@ -552,6 +614,92 @@
       </div>`;
   });
   registerRoute('breakdown_bind', bindPeriodBar);
+
+  // ======================================================================
+  // Money accounts view
+  // ======================================================================
+  registerRoute('accounts', async () => {
+    const d = await api(`/accounts-view?${qLoc()}&granularity=${state.granularity}&date=${state.anchor}`);
+    const hasUnassigned = d.unassigned.moneyIn > 0.005 || d.unassigned.moneyOut > 0.005;
+    return `
+      ${moneySubnav('accounts')}
+      ${periodBar({ current: { start: d.start, end: d.end, periodEnd: d.periodEnd } })}
+      <div class="card">
+        <div class="card-title">Where your money is</div>
+        ${d.accounts.map(a => `
+          <div class="acc-row">
+            <div class="acc-head"><strong>${esc(a.name)}</strong>
+              <span class="acc-balance ${a.balance < 0 ? 'neg' : ''}">${money(a.balance)}</span></div>
+            <div class="acc-move hint">
+              In ${money(a.moneyIn)} · Out ${money(a.moneyOut)} ·
+              Net <span class="${a.net >= 0 ? 'pos' : 'neg'}">${a.net >= 0 ? '+' : ''}${money(a.net)}</span> this period
+            </div>
+          </div>`).join('')}
+        ${hasUnassigned ? `
+          <div class="acc-row unassigned">
+            <div class="acc-head"><strong>Unassigned</strong></div>
+            <div class="acc-move hint">
+              Sales not tagged to an account: ${money(d.unassigned.moneyIn)} ·
+              Costs not tagged: ${money(d.unassigned.moneyOut)}
+            </div>
+          </div>` : ''}
+        <div class="hint">Balances = opening balance + everything tagged since the start. Commissions (${money(d.totals.commissionsNote)} this period) never hit an account — the platforms keep them before paying out. Tag sales and costs to accounts when you log them; untagged money shows here as unassigned so totals always match the dashboard.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Transfers between accounts</div>
+        <button class="btn primary" id="addTransfer">+ Record a transfer</button>
+        ${d.transfers.length ? d.transfers.map(t => `
+          <div class="list-row">
+            <div><strong>${esc(t.from_name)} → ${esc(t.to_name)}</strong>
+              <div class="hint">${fmtDate(t.date)}${t.note ? ' · ' + esc(t.note) : ''}</div></div>
+            <div class="list-right">${money(t.amount)}
+              <button class="icon-btn danger del-transfer" data-id="${t.id}" aria-label="Delete">✕</button></div>
+          </div>`).join('') : '<div class="hint" style="margin-top:10px">No transfers this period.</div>'}
+      </div>`;
+  });
+
+  registerRoute('accounts_bind', (app) => {
+    bindPeriodBar(app);
+    app.querySelector('#addTransfer').onclick = async () => {
+      const cats = await api(`/categories?${qLoc()}`);
+      const opts = cats.accounts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
+      modal(`
+        <h3>Record a transfer</h3>
+        <form id="trForm">
+          <label>Date<input type="date" name="date" value="${today()}" max="${today()}" required></label>
+          <div class="row2">
+            <label>From<select name="from" required>${opts}</select></label>
+            <label>To<select name="to" required>${opts}</select></label>
+          </div>
+          <label>Amount<input type="number" inputmode="decimal" step="any" min="0.01" name="amount" required placeholder="0"></label>
+          <label>Note <span class="hint">(optional)</span><input name="note" placeholder="Cash deposit"></label>
+          <div class="modal-actions">
+            <button type="button" class="btn" data-close>Cancel</button>
+            <button type="submit" class="btn primary">Save transfer</button>
+          </div>
+        </form>`, (wrap, close) => {
+        wrap.querySelector('[data-close]').onclick = close;
+        const sel = wrap.querySelectorAll('select');
+        if (sel[1].options.length > 1) sel[1].selectedIndex = 1;
+        wrap.querySelector('#trForm').onsubmit = async e => {
+          e.preventDefault();
+          const f = new FormData(e.target);
+          try {
+            await api('/transfers', { method: 'POST', body: {
+              location_id: state.locationId, date: f.get('date'),
+              from_account_id: Number(f.get('from')), to_account_id: Number(f.get('to')),
+              amount: Number(f.get('amount')), note: f.get('note') } });
+            close(); toast('Transfer saved'); render();
+          } catch (err) { toast(err.message, true); }
+        };
+      });
+    };
+    app.querySelectorAll('.del-transfer').forEach(b => b.onclick = async () => {
+      if (!confirm('Delete this transfer?')) return;
+      await api(`/transfers/${b.dataset.id}?${qLoc()}`, { method: 'DELETE' });
+      toast('Deleted'); render();
+    });
+  });
 
   // ======================================================================
   // Team schedule
@@ -909,6 +1057,8 @@
            ${c.benchmark_tag ? ` · counts as ${c.benchmark_tag}` : ''}`)}
         ${group('Recurring costs', 'recurring', cats.recurring, c =>
           c.benchmark_tag ? `Counts as ${c.benchmark_tag} for benchmarks` : '')}
+        ${group('Money accounts', 'accounts', cats.accounts, c =>
+          `Opening balance: ${money(c.opening_balance || 0)}`)}
         <div class="hint">Categories with history are archived instead of deleted, so old numbers stay right.</div>
       </div>`;
   }
@@ -1094,6 +1244,9 @@
       <label>Counts as (for benchmarks)
         <select name="benchmark_tag"><option value="">Nothing special</option>
           <option value="labor">Labor</option><option value="occupancy">Rent & occupancy</option></select></label>`
+      : group === 'accounts' ? `
+      <label>Opening balance <span class="hint">(what's in it right now)</span>
+        <input type="number" step="any" name="opening_balance" value="0"></label>`
       : `
       <label>Commission on this channel <span class="hint">(% taken off each sale — 0 for none)</span>
         <input type="number" step="any" min="0" max="100" name="commission_percent" value="0"></label>
@@ -1123,6 +1276,7 @@
             default_invoiced: f.get('default_invoiced') === 'on',
             commission_percent: f.get('commission_percent') || 0,
             commission_invoiced: f.get('commission_invoiced') === 'on',
+            opening_balance: f.get('opening_balance') || 0,
             benchmark_tag: f.get('benchmark_tag') || null } });
           close(); toast('Category added'); render();
         } catch (err) { toast(err.message, true); }
@@ -1131,7 +1285,7 @@
   }
 
   async function editCategory(group, id, currentName) {
-    // Revenue channels also get commission settings in the edit dialog.
+    // Revenue channels get commission settings; accounts get an opening balance.
     let commissionFields = '';
     if (group === 'revenue') {
       const cats = await api(`/categories?${qLoc()}`);
@@ -1141,6 +1295,12 @@
           <input type="number" step="any" min="0" max="100" name="commission_percent" value="${cat.commission_percent ?? 0}"></label>
         <label class="inv-toggle big"><input type="checkbox" name="commission_invoiced" ${cat.commission_invoiced ? 'checked' : ''}>Commission is invoiced (facturada)</label>
         <p class="hint">Changing the % only affects sales you log from now on — past days keep the commission they were saved with.</p>`;
+    } else if (group === 'accounts') {
+      const cats = await api(`/categories?${qLoc()}`);
+      const cat = cats.accounts.find(c => c.id === id) || {};
+      commissionFields = `
+        <label>Opening balance
+          <input type="number" step="any" name="opening_balance" value="${cat.opening_balance ?? 0}"></label>`;
     }
     modal(`
       <h3>Edit ${group === 'revenue' ? 'sales channel' : 'category'}</h3>
@@ -1160,6 +1320,8 @@
         if (group === 'revenue') {
           body.commission_percent = f.get('commission_percent') || 0;
           body.commission_invoiced = f.get('commission_invoiced') === 'on';
+        } else if (group === 'accounts') {
+          body.opening_balance = f.get('opening_balance') || 0;
         }
         await api(`/categories/${group}/${id}?${qLoc()}`, { method: 'PUT', body });
         close(); toast('Saved'); render();

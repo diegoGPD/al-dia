@@ -217,6 +217,19 @@ summary { cursor: pointer; font-weight: 600; font-size: 14px; padding: 6px 0; co
 .inv-box.good { background: var(--green-light); }
 .inv-box.warn { background: var(--amber-light); }
 
+/* ---------- money accounts ---------- */
+.seg.subnav { margin-bottom: 14px; }
+.acc-row { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.acc-row:last-of-type { border-bottom: 0; }
+.acc-row.unassigned { background: var(--amber-light); border-radius: 10px; padding: 12px; margin-top: 6px; }
+.acc-head { display: flex; justify-content: space-between; align-items: baseline; }
+.acc-balance { font-size: 18px; font-weight: 800; color: var(--green-dark); }
+.acc-balance.neg { color: var(--red); }
+.acc-move .pos { color: var(--green-dark); font-weight: 700; }
+.acc-move .neg { color: var(--red); font-weight: 700; }
+.cost-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cost-inputs select { font-size: 14px; }
+
 /* ---------- schedule ---------- */
 .sched-card { padding: 10px; }
 .sched-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
