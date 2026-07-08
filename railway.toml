@@ -1,0 +1,10 @@
+# Railway config — deploys the Dockerfile and mounts a persistent volume for the database.
+[build]
+builder = "dockerfile"
+
+[deploy]
+startCommand = "node server.js"
+restartPolicyType = "on_failure"
+
+# Attach a volume in the Railway dashboard mounted at /data
+# (Service → Settings → Volumes → mount path: /data)

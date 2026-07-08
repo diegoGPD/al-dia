@@ -1,0 +1,17 @@
+{
+  "name": "al-dia",
+  "version": "1.0.0",
+  "description": "Restaurant profitability tracker — revenue, costs, break-even, margins",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.21.0"
+  }
+}
