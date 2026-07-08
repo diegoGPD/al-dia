@@ -146,6 +146,18 @@ CREATE TABLE IF NOT EXISTS transfers (
 );
 CREATE INDEX IF NOT EXISTS idx_transfers_loc_date ON transfers(location_id, date);
 
+-- Manual balance corrections (PIN-protected): signed amount that nudges an
+-- account's balance to match reality.
+CREATE TABLE IF NOT EXISTS account_adjustments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  amount REAL NOT NULL,               -- + adds to the balance, - removes
+  note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_adjust_loc_date ON account_adjustments(location_id, date);
+
 -- Employee roster (per location)
 CREATE TABLE IF NOT EXISTS employees (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

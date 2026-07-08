@@ -631,10 +631,15 @@
         ${d.accounts.map(a => `
           <div class="acc-row">
             <div class="acc-head"><strong>${esc(a.name)}</strong>
-              <span class="acc-balance ${a.balance < 0 ? 'neg' : ''}">${money(a.balance)}</span></div>
+              <span class="acc-balance-wrap">
+                <span class="acc-balance ${a.balance < 0 ? 'neg' : ''}">${money(a.balance)}</span>
+                <button class="icon-btn adjust-acc" data-id="${a.id}" data-name="${esc(a.name)}"
+                  data-balance="${a.balance}" aria-label="Correct balance">✎</button>
+              </span></div>
             <div class="acc-move hint">
               In ${money(a.moneyIn)} · Out ${money(a.moneyOut)} ·
               Net <span class="${a.net >= 0 ? 'pos' : 'neg'}">${a.net >= 0 ? '+' : ''}${money(a.net)}</span> this period
+              ${a.adjustment ? ` · includes manual correction of ${a.adjustment > 0 ? '+' : ''}${money(a.adjustment)}` : ''}
             </div>
           </div>`).join('')}
         ${hasUnassigned ? `
@@ -700,6 +705,37 @@
       if (!confirm('Delete this transfer?')) return;
       await api(`/transfers/${b.dataset.id}?${qLoc()}`, { method: 'DELETE' });
       toast('Deleted'); render();
+    });
+    app.querySelectorAll('.adjust-acc').forEach(b => b.onclick = () => {
+      modal(`
+        <h3>Correct balance — ${esc(b.dataset.name)}</h3>
+        <p class="hint">Current balance: <strong>${money(Number(b.dataset.balance))}</strong>.
+          Enter what it should actually be — the difference is saved as a manual correction, dated today.</p>
+        <form id="adjForm">
+          <label>Actual balance<input type="number" inputmode="decimal" step="any" name="new_balance"
+            value="${Math.round(Number(b.dataset.balance) * 100) / 100}" required></label>
+          <label>Note <span class="hint">(optional)</span><input name="note" placeholder="Counted the register"></label>
+          <label>PIN<input type="password" inputmode="numeric" name="pin" required placeholder="••••"></label>
+          <div class="modal-actions">
+            <button type="button" class="btn" data-close>Cancel</button>
+            <button type="submit" class="btn primary">Save correction</button>
+          </div>
+        </form>`, (wrap, close) => {
+        wrap.querySelector('[data-close]').onclick = close;
+        wrap.querySelector('#adjForm').onsubmit = async e => {
+          e.preventDefault();
+          const f = new FormData(e.target);
+          try {
+            const r = await api('/accounts/adjust', { method: 'POST', body: {
+              location_id: state.locationId, account_id: Number(b.dataset.id),
+              new_balance: Number(f.get('new_balance')), pin: f.get('pin'), note: f.get('note') } });
+            close();
+            toast(r.adjusted === 0 ? 'Already matched — nothing to correct'
+              : `Corrected by ${r.adjusted > 0 ? '+' : ''}${money(r.adjusted)}`);
+            render();
+          } catch (err) { toast(err.message, true); }
+        };
+      });
     });
   });
 

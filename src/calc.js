@@ -227,6 +227,9 @@ function accountMovement(locationId, start, end) {
     WHERE location_id = ? AND date BETWEEN ? AND ? GROUP BY to_account_id`);
   const trOut = q(`SELECT from_account_id k, COALESCE(SUM(amount),0) v FROM transfers
     WHERE location_id = ? AND date BETWEEN ? AND ? GROUP BY from_account_id`);
+  // manual corrections (signed)
+  const adj = q(`SELECT account_id k, COALESCE(SUM(amount),0) v FROM account_adjustments
+    WHERE location_id = ? AND date BETWEEN ? AND ? GROUP BY account_id`);
   // recurring: daily-equivalent for items tagged to an account
   const recOut = {};
   for (const it of recurringItems(locationId)) {
@@ -234,7 +237,7 @@ function accountMovement(locationId, start, end) {
     const amt = dailyRate(it) * overlapDays(it, start, end);
     if (amt > 0) recOut[it.account_id] = (recOut[it.account_id] || 0) + amt;
   }
-  return { revIn, varOut, oneOut, recOut, trIn, trOut };
+  return { revIn, varOut, oneOut, recOut, trIn, trOut, adj };
 }
 
 function accountsView(locationId, start, end) {
@@ -247,12 +250,13 @@ function accountsView(locationId, start, end) {
     const g = (m) => m[a.id] || 0;
     const moneyIn = g(period.revIn) + g(period.trIn);
     const moneyOut = g(period.varOut) + g(period.oneOut) + g(period.recOut) + g(period.trOut);
-    const priorNet = (g(prior.revIn) + g(prior.trIn)) -
+    const priorNet = (g(prior.revIn) + g(prior.trIn) + g(prior.adj)) -
       (g(prior.varOut) + g(prior.oneOut) + g(prior.recOut) + g(prior.trOut));
+    const adjustment = g(period.adj);
     return {
       id: a.id, name: a.name, opening_balance: a.opening_balance,
-      moneyIn, moneyOut, net: moneyIn - moneyOut,
-      balance: a.opening_balance + priorNet + (moneyIn - moneyOut)
+      moneyIn, moneyOut, net: moneyIn - moneyOut + adjustment, adjustment,
+      balance: a.opening_balance + priorNet + (moneyIn - moneyOut) + adjustment
     };
   });
 

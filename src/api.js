@@ -471,6 +471,27 @@ r.get('/accounts-view', checkLocation, (req, res) => {
   res.json(view);
 });
 
+// Manual balance correction, PIN-protected. Sets the account's balance
+// to exactly the value given by recording the signed difference.
+const BALANCE_PIN = process.env.BALANCE_PIN || '2374';
+r.post('/accounts/adjust', checkLocation, (req, res) => {
+  const { account_id, new_balance, pin, note } = req.body;
+  if (String(pin) !== BALANCE_PIN) return res.status(403).json({ error: 'Wrong PIN' });
+  const acc = db.prepare('SELECT * FROM accounts WHERE id = ? AND location_id = ? AND active = 1')
+    .get(Number(account_id), req.locationId);
+  if (!acc) return res.status(404).json({ error: 'Account not found' });
+  const target = num(new_balance);
+  const today = new Date().toISOString().slice(0, 10);
+  const view = calc.accountsView(req.locationId, today, today);
+  const current = view.accounts.find(a => a.id === acc.id).balance;
+  const delta = target - current;
+  if (Math.abs(delta) < 0.005) return res.json({ ok: true, adjusted: 0, balance: current });
+  db.prepare(
+    'INSERT INTO account_adjustments (location_id, account_id, date, amount, note) VALUES (?,?,?,?,?)')
+    .run(req.locationId, acc.id, today, delta, (note || '').trim() || 'Manual balance correction');
+  res.json({ ok: true, adjusted: delta, balance: target });
+});
+
 r.post('/transfers', checkLocation, (req, res) => {
   const { date, from_account_id, to_account_id, amount, note } = req.body;
   if (badDate(date) || num(amount) <= 0) return res.status(400).json({ error: 'Date and amount are required' });

@@ -223,6 +223,8 @@ summary { cursor: pointer; font-weight: 600; font-size: 14px; padding: 6px 0; co
 .acc-row:last-of-type { border-bottom: 0; }
 .acc-row.unassigned { background: var(--amber-light); border-radius: 10px; padding: 12px; margin-top: 6px; }
 .acc-head { display: flex; justify-content: space-between; align-items: baseline; }
+.acc-balance-wrap { display: flex; align-items: center; gap: 8px; }
+.acc-balance-wrap .icon-btn { width: 28px; height: 28px; font-size: 14px; }
 .acc-balance { font-size: 18px; font-weight: 800; color: var(--green-dark); }
 .acc-balance.neg { color: var(--red); }
 .acc-move .pos { color: var(--green-dark); font-weight: 700; }
