@@ -283,7 +283,8 @@
           <div class="hint" id="accRemaining"></div>
         </details>
         <button class="btn primary full" type="submit">${existing.entry ? 'Update' : 'Save'} sales</button>
-        ${existing.entry ? `<div class="hint center">Already logged for this day — saving replaces it.</div>` : ''}
+        ${existing.entry ? `<div class="hint center">Already logged for this day — saving replaces it.
+          <br><a href="#" id="moveRev">Logged on the wrong day? Move it to another date</a></div>` : ''}
       </form>`;
   });
 
@@ -342,7 +343,39 @@
         nav('dashboard');
       } catch (err) { toast(err.message, true); }
     };
+    const mv = app.querySelector('#moveRev');
+    if (mv) mv.onclick = (e) => {
+      e.preventDefault();
+      moveDayDialog('sales log', dateEl.value, async (to) => {
+        await api('/revenue/move', { method: 'POST', body: {
+          location_id: state.locationId, from_date: dateEl.value, to_date: to } });
+        revDate = to;
+      });
+    };
   });
+
+  // Shared "move this day's log to another date" dialog.
+  function moveDayDialog(what, fromDate, doMove) {
+    modal(`
+      <h3>Move ${what}</h3>
+      <p class="hint">Everything logged on ${fmtDate(fromDate)} moves to the date you pick.</p>
+      <form id="moveForm">
+        <label>New date<input type="date" name="to" value="${fromDate}" max="${today()}" required></label>
+        <div class="modal-actions">
+          <button type="button" class="btn" data-close>Cancel</button>
+          <button type="submit" class="btn primary">Move</button>
+        </div>
+      </form>`, (wrap, close) => {
+      wrap.querySelector('[data-close]').onclick = close;
+      wrap.querySelector('#moveForm').onsubmit = async e => {
+        e.preventDefault();
+        const to = new FormData(e.target).get('to');
+        if (to === fromDate) { close(); return; }
+        try { await doMove(to); close(); toast('Moved to ' + fmtDate(to)); render(); }
+        catch (err) { toast(err.message, true); }
+      };
+    });
+  }
 
   // ======================================================================
   // Log daily (variable) costs
@@ -389,7 +422,8 @@
           }).join('')}
         </div>
         <button class="btn primary full" type="submit">Save costs</button>
-        <div class="hint center">Leave a row empty if it doesn't apply — empty rows aren't saved.</div>
+        <div class="hint center">Leave a row empty if it doesn't apply — empty rows aren't saved.
+          ${d.existing.length ? `<br><a href="#" id="moveCosts">Logged on the wrong day? Move these costs</a>` : ''}</div>
       </form>`;
   });
 
@@ -414,6 +448,15 @@
         toast('Costs saved');
         nav('dashboard');
       } catch (err) { toast(err.message, true); }
+    };
+    const mv = app.querySelector('#moveCosts');
+    if (mv) mv.onclick = (e) => {
+      e.preventDefault();
+      moveDayDialog("day's costs", dateEl.value, async (to) => {
+        await api('/costs/move', { method: 'POST', body: {
+          location_id: state.locationId, from_date: dateEl.value, to_date: to } });
+        costDate = to;
+      });
     };
   });
 
@@ -443,10 +486,11 @@
       ${list.length ? `<div class="card">
         <div class="card-title">Recent one-offs</div>
         ${list.map(o => `
-          <div class="list-row">
+          <div class="list-row" data-oneoff='${esc(JSON.stringify({ id: o.id, date: o.date, description: o.description, amount: o.amount, invoiced: o.invoiced, account_id: o.account_id }))}'>
             <div><strong>${esc(o.description)}</strong>
               <div class="hint">${fmtDate(o.date)} · ${o.invoiced ? 'Invoiced' : 'Not invoiced'}</div></div>
             <div class="list-right">${money(o.amount)}
+              <button class="icon-btn edit-oneoff" aria-label="Edit">✎</button>
               <button class="icon-btn danger del-oneoff" data-id="${o.id}" aria-label="Delete">✕</button></div>
           </div>`).join('')}
       </div>` : ''}`;
@@ -469,6 +513,40 @@
       if (!confirm('Delete this cost?')) return;
       await api(`/oneoff/${b.dataset.id}?${qLoc()}`, { method: 'DELETE' });
       toast('Deleted'); render();
+    });
+    app.querySelectorAll('.edit-oneoff').forEach(b => b.onclick = async () => {
+      const o = JSON.parse(b.closest('.list-row').dataset.oneoff);
+      const cats = await api(`/categories?${qLoc()}`);
+      modal(`
+        <h3>Edit one-off cost</h3>
+        <form id="ooEdit">
+          <label>Date<input type="date" name="date" value="${o.date}" max="${today()}" required></label>
+          <label>What was it?<input name="description" value="${esc(o.description)}" required></label>
+          <div class="row2">
+            <label>Amount<input type="number" inputmode="decimal" step="any" min="0.01" name="amount" value="${o.amount}" required></label>
+            <label>Paid from
+              <select name="account_id"><option value="">—</option>
+                ${cats.accounts.map(a => `<option value="${a.id}" ${o.account_id === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
+          </div>
+          <label class="inv-toggle big"><input type="checkbox" name="invoiced" ${o.invoiced ? 'checked' : ''}>Invoiced (facturado)</label>
+          <div class="modal-actions">
+            <button type="button" class="btn" data-close>Cancel</button>
+            <button type="submit" class="btn primary">Save</button>
+          </div>
+        </form>`, (wrap, close) => {
+        wrap.querySelector('[data-close]').onclick = close;
+        wrap.querySelector('#ooEdit').onsubmit = async e => {
+          e.preventDefault();
+          const f = new FormData(e.target);
+          try {
+            await api(`/oneoff/${o.id}?${qLoc()}`, { method: 'PUT', body: {
+              location_id: state.locationId, date: f.get('date'), description: f.get('description'),
+              amount: Number(f.get('amount')), invoiced: f.get('invoiced') === 'on',
+              account_id: Number(f.get('account_id')) || null } });
+            close(); toast('Saved'); render();
+          } catch (err) { toast(err.message, true); }
+        };
+      });
     });
   });
 
@@ -506,19 +584,24 @@
               <option value="weekly">Weekly</option>
             </select></label>
         </div>
-        <label>Paid from <span class="hint">(optional)</span>
-          <select name="account_id"><option value="">—</option>
-            ${cats.accounts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select></label>
+        <div class="row2">
+          <label>Paid from <span class="hint">(optional)</span>
+            <select name="account_id"><option value="">—</option>
+              ${cats.accounts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select></label>
+          <label>Starts counting from
+            <input type="date" name="start_date" value="${today()}" required></label>
+        </div>
         <label class="inv-toggle big"><input type="checkbox" name="invoiced">Invoiced (facturado)</label>
         <button class="btn primary full" type="submit">Add recurring cost</button>
       </form>
       ${items.length ? `<div class="card">
         <div class="card-title">Current recurring costs</div>
         ${items.map(i => `
-          <div class="list-row">
+          <div class="list-row" data-rec='${esc(JSON.stringify({ id: i.id, category_id: i.category_id, description: i.description, amount: i.amount, frequency: i.frequency, invoiced: i.invoiced, account_id: i.account_id, start_date: i.start_date }))}'>
             <div><strong>${esc(i.description)}</strong>
-              <div class="hint">${esc(i.category_name)} · ${FREQ[i.frequency]} · ${i.invoiced ? 'Invoiced' : 'Not invoiced'}</div></div>
+              <div class="hint">${esc(i.category_name)} · ${FREQ[i.frequency]} · ${i.invoiced ? 'Invoiced' : 'Not invoiced'} · since ${fmtDate(i.start_date, { month: 'short', day: 'numeric', year: 'numeric' })}</div></div>
             <div class="list-right">${money(i.amount)}<div class="hint">${money(i.daily)}/day</div>
+              <button class="icon-btn edit-rec" aria-label="Edit">✎</button>
               <button class="icon-btn danger del-rec" data-id="${i.id}" aria-label="End">✕</button></div>
           </div>`).join('')}
         <div class="hint">Deleting ends the cost from today — your past numbers stay correct.</div>
@@ -536,7 +619,7 @@
           description: f.get('description'), amount: Number(f.get('amount')),
           frequency: f.get('frequency'), invoiced: f.get('invoiced') === 'on',
           account_id: Number(f.get('account_id')) || null,
-          start_date: today() } });
+          start_date: f.get('start_date') || today() } });
         toast('Recurring cost added'); render();
       } catch (err) { toast(err.message, true); }
     };
@@ -544,6 +627,54 @@
       if (!confirm('End this recurring cost? Past periods keep it; from today it stops counting.')) return;
       await api(`/recurring/${b.dataset.id}?${qLoc()}`, { method: 'DELETE' });
       toast('Ended'); render();
+    });
+    app.querySelectorAll('.edit-rec').forEach(b => b.onclick = async () => {
+      const it = JSON.parse(b.closest('.list-row').dataset.rec);
+      const cats = await api(`/categories?${qLoc()}`);
+      modal(`
+        <h3>Edit recurring cost</h3>
+        <form id="recEdit">
+          <label>Category
+            <select name="category_id">${cats.recurring.map(c =>
+              `<option value="${c.id}" ${c.id === it.category_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
+          <label>Description<input name="description" value="${esc(it.description)}" required></label>
+          <div class="row2">
+            <label>Amount<input type="number" inputmode="decimal" step="any" min="0.01" name="amount" value="${it.amount}" required></label>
+            <label>How often
+              <select name="frequency">
+                <option value="monthly" ${it.frequency === 'monthly' ? 'selected' : ''}>Monthly</option>
+                <option value="biweekly" ${it.frequency === 'biweekly' ? 'selected' : ''}>Every 2 weeks</option>
+                <option value="weekly" ${it.frequency === 'weekly' ? 'selected' : ''}>Weekly</option>
+              </select></label>
+          </div>
+          <div class="row2">
+            <label>Paid from
+              <select name="account_id"><option value="">—</option>
+                ${cats.accounts.map(a => `<option value="${a.id}" ${it.account_id === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
+            <label>Starts counting from<input type="date" name="start_date" value="${it.start_date}" required></label>
+          </div>
+          <label class="inv-toggle big"><input type="checkbox" name="invoiced" ${it.invoiced ? 'checked' : ''}>Invoiced (facturado)</label>
+          <p class="hint">Changing the start date rewrites this cost's history — every past day from that date counts it.</p>
+          <div class="modal-actions">
+            <button type="button" class="btn" data-close>Cancel</button>
+            <button type="submit" class="btn primary">Save</button>
+          </div>
+        </form>`, (wrap, close) => {
+        wrap.querySelector('[data-close]').onclick = close;
+        wrap.querySelector('#recEdit').onsubmit = async e => {
+          e.preventDefault();
+          const f = new FormData(e.target);
+          try {
+            await api(`/recurring/${it.id}?${qLoc()}`, { method: 'PUT', body: {
+              location_id: state.locationId, category_id: Number(f.get('category_id')),
+              description: f.get('description'), amount: Number(f.get('amount')),
+              frequency: f.get('frequency'), invoiced: f.get('invoiced') === 'on',
+              account_id: Number(f.get('account_id')) || null,
+              start_date: f.get('start_date') } });
+            close(); toast('Saved'); render();
+          } catch (err) { toast(err.message, true); }
+        };
+      });
     });
   });
 
@@ -661,10 +792,11 @@
         <div class="card-title">Transfers between accounts</div>
         <button class="btn primary" id="addTransfer">+ Record a transfer</button>
         ${d.transfers.length ? d.transfers.map(t => `
-          <div class="list-row">
+          <div class="list-row" data-tr='${esc(JSON.stringify({ id: t.id, date: t.date, from: t.from_account_id, to: t.to_account_id, amount: t.amount, note: t.note }))}'>
             <div><strong>${esc(t.from_name)} → ${esc(t.to_name)}</strong>
               <div class="hint">${fmtDate(t.date)}${t.note ? ' · ' + esc(t.note) : ''}</div></div>
             <div class="list-right">${money(t.amount)}
+              <button class="icon-btn edit-transfer" aria-label="Edit">✎</button>
               <button class="icon-btn danger del-transfer" data-id="${t.id}" aria-label="Delete">✕</button></div>
           </div>`).join('') : '<div class="hint" style="margin-top:10px">No transfers this period.</div>'}
       </div>`;
@@ -710,6 +842,40 @@
       if (!confirm('Delete this transfer?')) return;
       await api(`/transfers/${b.dataset.id}?${qLoc()}`, { method: 'DELETE' });
       toast('Deleted'); render();
+    });
+    app.querySelectorAll('.edit-transfer').forEach(b => b.onclick = async () => {
+      const t = JSON.parse(b.closest('.list-row').dataset.tr);
+      const cats = await api(`/categories?${qLoc()}`);
+      const opts = sel => cats.accounts.map(a =>
+        `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
+      modal(`
+        <h3>Edit transfer</h3>
+        <form id="trEdit">
+          <label>Date<input type="date" name="date" value="${t.date}" max="${today()}" required></label>
+          <div class="row2">
+            <label>From<select name="from" required>${opts(t.from)}</select></label>
+            <label>To<select name="to" required>${opts(t.to)}</select></label>
+          </div>
+          <label>Amount<input type="number" inputmode="decimal" step="any" min="0.01" name="amount" value="${t.amount}" required></label>
+          <label>Note<input name="note" value="${esc(t.note || '')}"></label>
+          <div class="modal-actions">
+            <button type="button" class="btn" data-close>Cancel</button>
+            <button type="submit" class="btn primary">Save</button>
+          </div>
+        </form>`, (wrap, close) => {
+        wrap.querySelector('[data-close]').onclick = close;
+        wrap.querySelector('#trEdit').onsubmit = async e => {
+          e.preventDefault();
+          const f = new FormData(e.target);
+          try {
+            await api(`/transfers/${t.id}?${qLoc()}`, { method: 'PUT', body: {
+              location_id: state.locationId, date: f.get('date'),
+              from_account_id: Number(f.get('from')), to_account_id: Number(f.get('to')),
+              amount: Number(f.get('amount')), note: f.get('note') } });
+            close(); toast('Saved'); render();
+          } catch (err) { toast(err.message, true); }
+        };
+      });
     });
     app.querySelectorAll('.adjust-acc').forEach(b => b.onclick = () => {
       modal(`

@@ -298,6 +298,35 @@ r.put('/revenue', checkLocation, (req, res) => {
   res.json({ ok: true, total: finalTotal, commissions });
 });
 
+// Move a whole day's revenue log to a different date (wrong-day fixes).
+r.post('/revenue/move', checkLocation, (req, res) => {
+  const { from_date, to_date } = req.body;
+  if (badDate(from_date) || badDate(to_date)) return res.status(400).json({ error: 'Invalid dates' });
+  const entry = db.prepare('SELECT id FROM revenue_entries WHERE location_id = ? AND date = ?')
+    .get(req.locationId, from_date);
+  if (!entry) return res.status(404).json({ error: 'Nothing logged on that day' });
+  const clash = db.prepare('SELECT id FROM revenue_entries WHERE location_id = ? AND date = ?')
+    .get(req.locationId, to_date);
+  if (clash) return res.status(400).json({ error: `There's already a sales log on ${to_date} — delete or move that one first` });
+  db.prepare('UPDATE revenue_entries SET date = ? WHERE id = ?').run(to_date, entry.id);
+  res.json({ ok: true });
+});
+
+// Same for a day's variable-cost rows.
+r.post('/costs/move', checkLocation, (req, res) => {
+  const { from_date, to_date } = req.body;
+  if (badDate(from_date) || badDate(to_date)) return res.status(400).json({ error: 'Invalid dates' });
+  const rows = db.prepare('SELECT category_id FROM variable_costs WHERE location_id = ? AND date = ?')
+    .all(req.locationId, from_date);
+  if (!rows.length) return res.status(404).json({ error: 'No costs logged on that day' });
+  const clash = db.prepare('SELECT COUNT(*) c FROM variable_costs WHERE location_id = ? AND date = ?')
+    .get(req.locationId, to_date).c;
+  if (clash) return res.status(400).json({ error: `There are already costs on ${to_date} — edit that day instead` });
+  db.prepare('UPDATE variable_costs SET date = ? WHERE location_id = ? AND date = ?')
+    .run(to_date, req.locationId, from_date);
+  res.json({ ok: true });
+});
+
 r.delete('/revenue', checkLocation, (req, res) => {
   if (badDate(req.query.date)) return res.status(400).json({ error: 'Invalid date' });
   db.prepare('DELETE FROM revenue_entries WHERE location_id = ? AND date = ?').run(req.locationId, req.query.date);
@@ -413,6 +442,21 @@ r.post('/oneoff', checkLocation, (req, res) => {
   res.json({ id: Number(lastInsertRowid) });
 });
 
+r.put('/oneoff/:id', checkLocation, (req, res) => {
+  const it = db.prepare('SELECT * FROM oneoff_costs WHERE id = ? AND location_id = ?')
+    .get(Number(req.params.id), req.locationId);
+  if (!it) return res.status(404).json({ error: 'Not found' });
+  const b = req.body;
+  db.prepare('UPDATE oneoff_costs SET date=?, description=?, amount=?, invoiced=?, account_id=? WHERE id=?')
+    .run(!badDate(b.date) ? b.date : it.date,
+      b.description !== undefined ? String(b.description).trim() : it.description,
+      b.amount !== undefined ? num(b.amount) : it.amount,
+      b.invoiced !== undefined ? bool01(b.invoiced) : it.invoiced,
+      b.account_id !== undefined ? (b.account_id ? Number(b.account_id) : null) : it.account_id,
+      it.id);
+  res.json({ ok: true });
+});
+
 r.delete('/oneoff/:id', checkLocation, (req, res) => {
   db.prepare('DELETE FROM oneoff_costs WHERE id = ? AND location_id = ?')
     .run(Number(req.params.id), req.locationId);
@@ -504,6 +548,22 @@ r.post('/transfers', checkLocation, (req, res) => {
     'INSERT INTO transfers (location_id, date, from_account_id, to_account_id, amount, note) VALUES (?,?,?,?,?,?)')
     .run(req.locationId, date, from, to, num(amount), (note || '').trim() || null);
   res.json({ id: Number(lastInsertRowid) });
+});
+
+r.put('/transfers/:id', checkLocation, (req, res) => {
+  const it = db.prepare('SELECT * FROM transfers WHERE id = ? AND location_id = ?')
+    .get(Number(req.params.id), req.locationId);
+  if (!it) return res.status(404).json({ error: 'Not found' });
+  const b = req.body;
+  const from = b.from_account_id !== undefined ? Number(b.from_account_id) : it.from_account_id;
+  const to = b.to_account_id !== undefined ? Number(b.to_account_id) : it.to_account_id;
+  if (from === to) return res.status(400).json({ error: 'Pick two different accounts' });
+  db.prepare('UPDATE transfers SET date=?, from_account_id=?, to_account_id=?, amount=?, note=? WHERE id=?')
+    .run(!badDate(b.date) ? b.date : it.date, from, to,
+      b.amount !== undefined ? num(b.amount) : it.amount,
+      b.note !== undefined ? ((b.note || '').trim() || null) : it.note,
+      it.id);
+  res.json({ ok: true });
 });
 
 r.delete('/transfers/:id', checkLocation, (req, res) => {
