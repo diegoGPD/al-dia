@@ -114,6 +114,7 @@ code { background: var(--bg); padding: 1px 5px; border-radius: 5px; font-size: 1
 .progress-fill.var { background: var(--amber); }
 .progress-fill.one { background: #9b59b6; }
 .progress-fill.comm { background: #e07a3f; }
+.progress-fill.labor { background: #2a9d8f; }
 .cat-row .hint { display: block; font-weight: 400; margin: 1px 0 2px; }
 .type-row { display: flex; justify-content: space-between; font-size: 14px; }
 

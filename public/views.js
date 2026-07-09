@@ -586,10 +586,12 @@
       ${periodBar(d)}
       <div class="card">
         <div class="card-title">Where the money went — ${money(c.costs.total)} total</div>
-        ${typeBar('Recurring (rent, payroll…)', c.costs.recurring, 'rec')}
+        ${typeBar('Recurring (rent, subscriptions…)', c.costs.recurring, 'rec')}
+        ${typeBar('Team (scheduled labor)', c.costs.labor, 'labor')}
         ${typeBar('Day-to-day (food, supplies…)', c.costs.variable, 'var')}
         ${typeBar('Channel commissions (apps, cards…)', c.costs.commissions, 'comm')}
         ${typeBar('One-offs', c.costs.oneoff, 'one')}
+        ${c.laborDoubleCount ? `<div class="hint" style="margin-top:8px">⚠ You have payroll in recurring costs <em>and</em> a team schedule — that may count labor twice. If the schedule is your real payroll, delete the recurring payroll item (it still works as the budget line on the Team page).</div>` : ''}
       </div>
       <div class="card">
         <div class="card-title">Invoiced vs not invoiced</div>
@@ -783,7 +785,7 @@
         </div>
         <div class="be-row"><span>Projected sales</span>
           <strong>${money(fx.revenue.low)} – ${money(fx.revenue.high)}</strong></div>
-        <div class="be-row"><span>Projected costs <span class="hint">(recurring are exact: ${money(fx.costs.recurring)})</span></span>
+        <div class="be-row"><span>Projected costs <span class="hint">(recurring exact: ${money(fx.costs.recurring)}${fx.costs.labor > 0 ? ` · team ${money(fx.costs.labor)}` : ''})</span></span>
           <strong>≈ ${money(fx.costs.point)}</strong></div>
         <div class="be-row"><span>Projected profit</span>
           <strong class="${fx.profit.point >= 0 ? 'pos' : 'neg'}">${money(fx.profit.low)} – ${money(fx.profit.high)}</strong></div>
@@ -1022,6 +1024,7 @@
             <span class="pill ${budgetPill[0]}">${budgetPill[1]}</span></strong></div>`
           : `<div class="hint">Tag a recurring cost category as "labor" in Settings and add your payroll there to compare scheduled vs budgeted cost.</div>`}
         ${overtime.length ? `<div class="hint">⚠ Over 48 h/week (typical Mexican full-time standard): ${overtime.map(e => esc(e.name)).join(', ')}. Just a heads-up, not legal advice.</div>` : ''}
+        <div class="hint">This cost books itself into your numbers automatically, spread day by day — hourly people on the days they work, salaries split across the week. No need to log it as a cost anywhere else.</div>
       </div>`}
 
       <details class="card" id="rosterBox">

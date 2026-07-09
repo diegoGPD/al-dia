@@ -72,6 +72,38 @@ function recurringDailyNow(locationId, today) {
     .reduce((sum, it) => sum + dailyRate(it), 0);
 }
 
+// ---------- scheduled team labor, booked daily ----------
+// Each day carries its own labor cost: that day's hourly shifts at their
+// rates, plus salaried staff spread evenly across the week (weekly rate / 7)
+// for any week that actually has a schedule. Weeks with no shifts cost
+// nothing, so nothing appears until the scheduler is used.
+function laborMaps(locationId, start, end) {
+  // widen to whole weeks so the "does this week have a schedule" test is right
+  const dowOf = s => new Date(s + 'T12:00:00Z').getUTCDay();
+  const mondayOf = s => addDays(s, -((dowOf(s) + 6) % 7));
+  const wideStart = mondayOf(start), wideEnd = addDays(mondayOf(end), 6);
+  const hourly = Object.fromEntries(db.prepare(
+    `SELECT s.date, SUM(((CASE WHEN s.end_min <= s.start_min THEN s.end_min + 1440 ELSE s.end_min END) - s.start_min) / 60.0 * e.rate) v
+     FROM shifts s JOIN employees e ON e.id = s.employee_id AND e.pay_type = 'hourly'
+     WHERE s.location_id = ? AND s.date BETWEEN ? AND ? GROUP BY s.date`)
+    .all(locationId, wideStart, wideEnd).map(r => [r.date, r.v]));
+  const scheduledWeeks = new Set(db.prepare(
+    `SELECT DISTINCT date FROM shifts WHERE location_id = ? AND date BETWEEN ? AND ?`)
+    .all(locationId, wideStart, wideEnd).map(r => mondayOf(r.date)));
+  const salaryDaily = db.prepare(
+    `SELECT COALESCE(SUM(rate),0) v FROM employees WHERE location_id = ? AND active = 1 AND pay_type = 'salary'`)
+    .get(locationId).v / 7;
+  const onDay = date => (hourly[date] || 0) + (scheduledWeeks.has(mondayOf(date)) ? salaryDaily : 0);
+  return { onDay, salaryDaily, scheduledWeeks };
+}
+
+function laborForRange(locationId, start, end) {
+  const { onDay } = laborMaps(locationId, start, end);
+  let total = 0;
+  for (let d = start; d <= end; d = addDays(d, 1)) total += onDay(d);
+  return total;
+}
+
 // ---------- period summary ----------
 function summary(locationId, start, end) {
   const revenue = db.prepare(
@@ -107,13 +139,15 @@ function summary(locationId, start, end) {
   const oneoffInvoiced = oneoffRows.reduce((s, r) => s + (r.invoiced ? r.amount : 0), 0);
 
   const rec = recurringForRange(locationId, start, end);
+  const labor = laborForRange(locationId, start, end);
 
-  const totalCosts = variable + commissions + oneoff + rec.total;
+  const totalCosts = variable + commissions + oneoff + rec.total + labor;
   const profit = revenue - totalCosts;
+  // Scheduled labor counts as not-invoiced spend.
   const invoicedTotal = variableInvoiced + commissionsInvoiced + oneoffInvoiced + rec.invoiced;
 
-  // Benchmark tag totals (food/labor from variable; labor/occupancy from recurring)
-  const tag = { food: 0, labor: 0, occupancy: 0 };
+  // Benchmark tag totals (food/labor from variable; labor/occupancy from recurring; scheduled team = labor)
+  const tag = { food: 0, labor: labor, occupancy: 0 };
   for (const r of varRows) if (r.benchmark_tag) tag[r.benchmark_tag] += r.amount;
   for (const [t, amt] of Object.entries(rec.byTag)) tag[t] += amt;
 
@@ -126,8 +160,12 @@ function summary(locationId, start, end) {
       commissions, commissionsByChannel: revByCat.filter(r => r.commission > 0),
       recurring: rec.total, recurringByCategory: rec.byCategory,
       oneoff, oneoffItems: oneoffRows,
+      labor,
       total: totalCosts
     },
+    // Both scheduled labor AND labor-tagged recurring costs present = payroll
+    // probably counted twice. Surfaced as a warning in the UI.
+    laborDoubleCount: labor > 0 && (rec.byTag.labor || 0) > 0,
     invoiced: {
       total: invoicedTotal,
       notInvoiced: totalCosts - invoicedTotal,
@@ -146,7 +184,7 @@ function summary(locationId, start, end) {
 // ---------- break-even ----------
 // Fixed costs for the period F, variable-cost ratio v -> break-even sales = F / (1 - v).
 function breakEven(locationId, start, end, sum) {
-  const fixed = sum.costs.recurring + sum.costs.oneoff;
+  const fixed = sum.costs.recurring + sum.costs.oneoff + sum.costs.labor;
   // Costs that scale with sales: day-to-day costs + channel commissions.
   const scaling = sum.costs.variable + sum.costs.commissions;
   let ratio = null, ratioSource = 'actual';
@@ -195,6 +233,7 @@ function trend(locationId, endDate, days = 30) {
   const vc = Object.fromEntries(varRows.map(r => [r.date, r.a]));
   const oo = Object.fromEntries(offRows.map(r => [r.date, r.a]));
   const cm = Object.fromEntries(commRows.map(r => [r.date, r.a]));
+  const labor = laborMaps(locationId, start, endDate);
   const items = recurringItems(locationId);
 
   const out = [];
@@ -204,7 +243,7 @@ function trend(locationId, endDate, days = 30) {
       .filter(it => it.start_date <= date && (!it.end_date || it.end_date >= date))
       .reduce((s, it) => s + dailyRate(it), 0);
     const revenue = rev[date] || 0;
-    const costs = (vc[date] || 0) + (cm[date] || 0) + (oo[date] || 0) + recDay;
+    const costs = (vc[date] || 0) + (cm[date] || 0) + (oo[date] || 0) + recDay + labor.onDay(date);
     out.push({ date, revenue, costs, profit: revenue - costs });
   }
   return out;
@@ -266,8 +305,9 @@ function accountsView(locationId, start, end) {
   const taggedOut = Object.values(period.varOut).reduce((s, v) => s + v, 0) +
     Object.values(period.oneOut).reduce((s, v) => s + v, 0) +
     Object.values(period.recOut).reduce((s, v) => s + v, 0);
-  // Commissions are never account-tagged (the platforms deduct them before paying out).
-  const costsExclCommissions = sum.costs.total - sum.costs.commissions;
+  // Commissions are never account-tagged (the platforms deduct them before
+  // paying out) and scheduled team cost isn't paid from an account here either.
+  const costsExclCommissions = sum.costs.total - sum.costs.commissions - sum.costs.labor;
   return {
     accounts: rows,
     unassigned: {
@@ -317,5 +357,6 @@ function benchmarks(sum) {
 module.exports = {
   periodBounds, prevPeriodAnchor, addDays,
   summary, breakEven, trend, benchmarks,
-  recurringDailyNow, dailyRate, recurringForRange, accountsView
+  recurringDailyNow, dailyRate, recurringForRange, accountsView,
+  laborForRange, laborMaps
 };

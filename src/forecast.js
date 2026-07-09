@@ -132,16 +132,35 @@ function forecast(locationId, horizonDays) {
 
   // Recurring costs are known exactly from the schedule.
   const recurring = calc.recurringForRange(locationId, start, end).total;
+
+  // Team labor, day by day: weeks already scheduled use their real cost;
+  // unscheduled future weeks fall back to the most recent scheduled week's
+  // daily average. Zero if the scheduler isn't used.
+  const laborMap = calc.laborMaps(locationId, start, end);
+  let fallbackDaily = 0;
+  for (let back = 1; back <= 8; back++) {
+    const monday = addDays(start, -((dow(start) + 6) % 7) - back * 7);
+    const weekCost = calc.laborForRange(locationId, monday, addDays(monday, 6));
+    if (weekCost > 0) { fallbackDaily = weekCost / 7; break; }
+  }
+  let labor = 0;
+  for (let i = 0; i < horizonDays; i++) {
+    const date = addDays(start, i);
+    const scheduled = laborMap.onDay(date);
+    labor += scheduled > 0 ? scheduled : fallbackDaily;
+  }
+
   const scalingCosts = revenue * (varRatio + commRatio);
   const oneoffEst = oneoffPerDay * horizonDays;
-  const costs = scalingCosts + recurring + oneoffEst;
+  const fixed = recurring + oneoffEst + labor;
+  const costs = scalingCosts + fixed;
   const profit = revenue - costs;
-  const profitLow = (revenue - sd) - ((revenue - sd) * (varRatio + commRatio) + recurring + oneoffEst);
-  const profitHigh = (revenue + sd) - ((revenue + sd) * (varRatio + commRatio) + recurring + oneoffEst);
+  const profitLow = (revenue - sd) - ((revenue - sd) * (varRatio + commRatio) + fixed);
+  const profitHigh = (revenue + sd) - ((revenue + sd) * (varRatio + commRatio) + fixed);
 
   // Break-even for the horizon
   const ratio = varRatio + commRatio;
-  const beSales = ratio < 0.99 ? (recurring + oneoffEst) / (1 - ratio) : null;
+  const beSales = ratio < 0.99 ? fixed / (1 - ratio) : null;
   let beStatus = 'unknown';
   if (beSales !== null) {
     if (revenue - sd > beSales) beStatus = 'on_track';
@@ -155,7 +174,7 @@ function forecast(locationId, horizonDays) {
   return {
     horizonDays, start, end,
     revenue: { point: revenue, low: Math.max(0, revenue - sd), high: revenue + sd },
-    costs: { point: costs, scaling: scalingCosts, recurring, oneoffEst },
+    costs: { point: costs, scaling: scalingCosts, recurring, oneoffEst, labor },
     profit: { point: profit, low: profitLow, high: profitHigh },
     ratios: { variable: varRatio, commissions: commRatio, source: ratioSource },
     breakEven: { sales: beSales, status: beStatus },
@@ -297,10 +316,13 @@ function insights(locationId) {
   out.revGrowth = revGrowth;
 
   // Weekly margin + effective commission rate series (drift the user asked about)
+  const yesterday = addDays(today, -1);
   out.weekly = weeks.slice(0, 8).map(w => {
     // Prorate fixed costs for partial weeks so the current week's margin is honest.
     const rec = calc.recurringForRange(locationId, w.week, addDays(w.week, 6)).total * (w.days / 7);
-    const costs = w.variable + w.commissions + w.oneoff + rec;
+    const weekEnd = addDays(w.week, 6) < yesterday ? addDays(w.week, 6) : yesterday;
+    const labor = calc.laborForRange(locationId, w.week, weekEnd);
+    const costs = w.variable + w.commissions + w.oneoff + rec + labor;
     return {
       week: w.week, revenue: w.revenue, profit: w.revenue - costs,
       margin: w.revenue > 0 ? (w.revenue - costs) / w.revenue : null,
