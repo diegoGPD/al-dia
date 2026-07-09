@@ -15,13 +15,17 @@ const badDate = d => !d || !DATE_RE.test(d);
 // ============ auth & setup ============
 r.get('/status', (req, res) => {
   const hasUsers = db.prepare('SELECT COUNT(*) c FROM users').get().c > 0;
-  res.json({ needsSetup: !hasUsers });
+  res.json({ needsSetup: !hasUsers, setupCodeRequired: !!process.env.SETUP_CODE });
 });
 
 // First run: create the owner account and first location.
+// If SETUP_CODE is set in the environment, it must match — so an empty
+// database never becomes a free-for-all on a public URL.
 r.post('/setup', (req, res) => {
   if (db.prepare('SELECT COUNT(*) c FROM users').get().c > 0)
     return res.status(400).json({ error: 'Already set up' });
+  if (process.env.SETUP_CODE && String(req.body.setup_code || '') !== process.env.SETUP_CODE)
+    return res.status(403).json({ error: 'Wrong setup code' });
   const { email, name, password, locationName } = req.body;
   if (!email || !password || password.length < 8)
     return res.status(400).json({ error: 'Email and a password of at least 8 characters are required' });

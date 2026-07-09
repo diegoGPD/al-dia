@@ -39,7 +39,7 @@
     };
   });
 
-  registerRoute('_setup', () => `
+  registerRoute('_setup', (status) => `
     <div class="auth-wrap"><div class="auth-card">
       <h1 class="auth-logo">Al Día</h1>
       <p class="auth-sub">Welcome! Let's set up your account — takes 30 seconds.</p>
@@ -49,6 +49,8 @@
         <label>Password <span class="hint">(at least 8 characters)</span>
           <input type="password" name="password" required minlength="8" autocomplete="new-password"></label>
         <label>Your restaurant's name<input name="locationName" required placeholder="La Cocina Centro"></label>
+        ${App.state.setupCodeRequired ? `<label>Setup code <span class="hint">(set by whoever deployed this)</span>
+          <input name="setup_code" required autocomplete="off"></label>` : ''}
         <button class="btn primary full" type="submit">Create my account</button>
         <p class="form-error" id="authErr"></p>
       </form>
@@ -61,7 +63,8 @@
       try {
         await api('/setup', { method: 'POST', body: {
           name: f.get('name'), email: f.get('email'),
-          password: f.get('password'), locationName: f.get('locationName') } });
+          password: f.get('password'), locationName: f.get('locationName'),
+          setup_code: f.get('setup_code') || undefined } });
         await loadMe(); nav('dashboard'); render();
       } catch (err) { app.querySelector('#authErr').textContent = err.message; }
     };

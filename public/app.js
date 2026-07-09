@@ -115,6 +115,7 @@ const App = (() => {
     if (!state.me) {
       const status = await api('/status').catch(() => ({ needsSetup: false }));
       if (token !== renderToken) return;
+      state.setupCodeRequired = !!status.setupCodeRequired;
       app.innerHTML = routes[status.needsSetup ? '_setup' : '_login']();
       routes['_' + (status.needsSetup ? 'setup' : 'login') + '_bind']?.(app);
       return;

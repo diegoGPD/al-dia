@@ -25,7 +25,7 @@ Multi-location, multi-user (owner + managers), fully configurable categories, in
    ```
 2. **Create the Railway project.** At railway.app → *New Project* → *Deploy from GitHub repo* → pick `al-dia`. Railway detects the Dockerfile and builds it.
 3. **Add the persistent volume (important).** On the project canvas, right-click empty space → *Volume* (or press ⌘K / Ctrl+K → "Create Volume"). Attach it to the al-dia service and set the mount path to `/data`. Without this, the database resets on every deploy.
-4. **Set one variable.** Service → *Variables* → add `SESSION_SECRET` = any long random string (e.g. from https://generate-secret.vercel.app/32). Optional but recommended: `NODE_ENV` = `production` (already set by the Dockerfile).
+4. **Set two variables.** Service → *Variables* → add `SESSION_SECRET` = any long random string (e.g. from https://generate-secret.vercel.app/32), and `SETUP_CODE` = a code only you know. The setup code is required to create the owner account on an empty database — without it, anyone who opens your URL while the database is empty (fresh deploy, missing volume) could claim the app as theirs.
 5. **Expose it.** Service → *Settings* → *Networking* → *Generate domain*. You'll get `something.up.railway.app` over HTTPS.
 6. **Open the URL.** The first visit shows a 30-second setup screen where you create your owner account and first location. There are no default passwords.
 
