@@ -182,34 +182,56 @@ function summary(locationId, start, end) {
 }
 
 // ---------- break-even ----------
-// Fixed costs for the period F, variable-cost ratio v -> break-even sales = F / (1 - v).
+// Fixed costs F, sales-scaling ratio v -> break-even sales = F / (1 - v).
+// The ratio always covers BOTH components: day-to-day costs AND channel
+// commissions. Each uses this period's actual data when present, otherwise
+// the last 28 days of history, otherwise category defaults — so break-even
+// never quietly drops commissions just because today's costs aren't logged yet.
+function recentScalingRatios(locationId, before) {
+  const start = addDays(before, -27);
+  const rev = db.prepare(
+    `SELECT COALESCE(SUM(total),0) t FROM revenue_entries WHERE location_id = ? AND date BETWEEN ? AND ?`)
+    .get(locationId, start, before).t;
+  if (rev <= 0) return { varRatio: null, commRatio: null };
+  const vc = db.prepare(
+    `SELECT COALESCE(SUM(amount),0) t FROM variable_costs WHERE location_id = ? AND date BETWEEN ? AND ?`)
+    .get(locationId, start, before).t;
+  const cm = db.prepare(
+    `SELECT COALESCE(SUM(ri.commission_amount),0) t FROM revenue_items ri
+     JOIN revenue_entries re ON re.id = ri.entry_id
+     WHERE re.location_id = ? AND re.date BETWEEN ? AND ?`).get(locationId, start, before).t;
+  return { varRatio: vc > 0 ? vc / rev : null, commRatio: cm > 0 ? cm / rev : null };
+}
+
 function breakEven(locationId, start, end, sum) {
   const fixed = sum.costs.recurring + sum.costs.oneoff + sum.costs.labor;
-  // Costs that scale with sales: day-to-day costs + channel commissions.
-  const scaling = sum.costs.variable + sum.costs.commissions;
-  let ratio = null, ratioSource = 'actual';
-  if (sum.revenue > 0 && scaling > 0) {
-    ratio = scaling / sum.revenue;
-  } else {
-    // No sales/cost data yet: estimate from category defaults
-    // (percent-based cost categories + average channel commission).
-    const rows = db.prepare(
-      `SELECT COALESCE(SUM(default_percent),0) p FROM variable_cost_categories
-       WHERE location_id = ? AND active = 1 AND entry_mode = 'percent'`).get(locationId);
-    const comm = db.prepare(
-      `SELECT COALESCE(AVG(commission_percent),0) p FROM revenue_categories
-       WHERE location_id = ? AND active = 1`).get(locationId);
-    ratio = Math.min((rows.p + comm.p) / 100, 0.95);
-    ratioSource = 'estimated';
-  }
-  if (ratio >= 0.99) return { salesNeeded: null, ratio, ratioSource, fixed, gap: null, status: 'unprofitable_ratio' };
+  const recent = recentScalingRatios(locationId, addDays(start, -1));
+  let sources = 0; // how many components come from this period's actual data
+
+  let varRatio;
+  if (sum.revenue > 0 && sum.costs.variable > 0) { varRatio = sum.costs.variable / sum.revenue; sources++; }
+  else if (recent.varRatio !== null) varRatio = recent.varRatio;
+  else varRatio = Math.min(db.prepare(
+    `SELECT COALESCE(SUM(default_percent),0) p FROM variable_cost_categories
+     WHERE location_id = ? AND active = 1 AND entry_mode = 'percent'`).get(locationId).p / 100, 0.9);
+
+  let commRatio;
+  if (sum.revenue > 0 && sum.costs.commissions > 0) { commRatio = sum.costs.commissions / sum.revenue; sources++; }
+  else if (recent.commRatio !== null) commRatio = recent.commRatio;
+  else commRatio = Math.min(db.prepare(
+    `SELECT COALESCE(AVG(commission_percent),0) p FROM revenue_categories
+     WHERE location_id = ? AND active = 1`).get(locationId).p / 100, 0.5);
+
+  const ratio = Math.min(varRatio + commRatio, 0.95);
+  const ratioSource = sources === 2 ? 'actual' : sources === 1 ? 'mixed' : 'estimated';
+  if (ratio >= 0.99) return { salesNeeded: null, ratio, varRatio, commRatio, ratioSource, fixed, gap: null, status: 'unprofitable_ratio' };
   const salesNeeded = fixed / (1 - ratio);
   const gap = sum.revenue - salesNeeded;
   let status;
   if (salesNeeded === 0 && sum.revenue === 0) status = 'no_data';
   else if (Math.abs(gap) <= salesNeeded * 0.02) status = 'at';
   else status = gap > 0 ? 'above' : 'below';
-  return { salesNeeded, ratio, ratioSource, fixed, gap, status };
+  return { salesNeeded, ratio, varRatio, commRatio, ratioSource, fixed, gap, status };
 }
 
 // ---------- daily trend ----------
