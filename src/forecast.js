@@ -4,10 +4,7 @@
 // (which drift as the channel mix changes). No generic industry assumptions.
 const { db } = require('./db');
 const calc = require('./calc');
-
-const addDays = calc.addDays;
-const todayStr = () => new Date().toISOString().slice(0, 10);
-const dow = d => new Date(d + 'T12:00:00Z').getUTCDay(); // 0=Sun
+const { addDays, todayStr, dow, mondayOf } = require('./lib/dates');
 
 // ---------- raw history ----------
 function dailyHistory(locationId, days = 84) {
@@ -395,7 +392,6 @@ function channelBehavior(locationId) {
     .all(locationId, start, today);
   if (!rows.length) return { channels: [], weekly: [] };
 
-  const mondayOf = d => addDays(d, -((dow(d) + 6) % 7));
   const cut = addDays(today, -28);
   const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 

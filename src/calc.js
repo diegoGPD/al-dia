@@ -1,32 +1,6 @@
 // Calculation engine: period summaries, break-even, margins, trends, benchmarks.
 const { db } = require('./db');
-
-// ---------- date helpers (all dates are YYYY-MM-DD strings, UTC-safe) ----------
-const d2u = s => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10));
-const u2d = ms => new Date(ms).toISOString().slice(0, 10);
-const addDays = (s, n) => u2d(d2u(s) + n * 864e5);
-const daysBetween = (a, b) => Math.round((d2u(b) - d2u(a)) / 864e5); // inclusive count = +1
-
-// Period bounds for a granularity around an anchor date. Weeks start Monday.
-function periodBounds(granularity, anchor) {
-  if (granularity === 'day') return { start: anchor, end: anchor };
-  if (granularity === 'week') {
-    const dow = new Date(d2u(anchor)).getUTCDay(); // 0=Sun
-    const start = addDays(anchor, -((dow + 6) % 7));
-    return { start, end: addDays(start, 6) };
-  }
-  // month
-  const start = anchor.slice(0, 8) + '01';
-  const next = new Date(Date.UTC(+anchor.slice(0, 4), +anchor.slice(5, 7), 1));
-  return { start, end: u2d(next.getTime() - 864e5) };
-}
-
-function prevPeriodAnchor(granularity, anchor) {
-  if (granularity === 'day') return addDays(anchor, -1);
-  if (granularity === 'week') return addDays(anchor, -7);
-  const d = new Date(Date.UTC(+anchor.slice(0, 4), +anchor.slice(5, 7) - 2, 1));
-  return u2d(d.getTime());
-}
+const { addDays, daysBetween, dow, mondayOf } = require('./lib/dates');
 
 // ---------- recurring costs ----------
 const DAILY_DIVISOR = { weekly: 7, biweekly: 14, monthly: 365 / 12 };
@@ -65,13 +39,6 @@ function recurringForRange(locationId, start, end) {
   return { total, invoiced, byCategory, byTag };
 }
 
-// Current daily fixed-cost burn (items live today).
-function recurringDailyNow(locationId, today) {
-  return recurringItems(locationId)
-    .filter(it => it.start_date <= today && (!it.end_date || it.end_date >= today))
-    .reduce((sum, it) => sum + dailyRate(it), 0);
-}
-
 // ---------- scheduled team labor, booked daily ----------
 // Each day carries its own labor cost: that day's hourly shifts at their
 // rates, plus salaried staff spread evenly across the week (weekly rate / 7)
@@ -79,8 +46,6 @@ function recurringDailyNow(locationId, today) {
 // nothing, so nothing appears until the scheduler is used.
 function laborMaps(locationId, start, end) {
   // widen to whole weeks so the "does this week have a schedule" test is right
-  const dowOf = s => new Date(s + 'T12:00:00Z').getUTCDay();
-  const mondayOf = s => addDays(s, -((dowOf(s) + 6) % 7));
   const wideStart = mondayOf(start), wideEnd = addDays(mondayOf(end), 6);
   const hourly = Object.fromEntries(db.prepare(
     `SELECT s.date, SUM(((CASE WHEN s.end_min <= s.start_min THEN s.end_min + 1440 ELSE s.end_min END) - s.start_min) / 60.0 * e.rate) v
@@ -377,8 +342,7 @@ function benchmarks(sum) {
 }
 
 module.exports = {
-  periodBounds, prevPeriodAnchor, addDays,
   summary, breakEven, trend, benchmarks,
-  recurringDailyNow, dailyRate, recurringForRange, accountsView,
+  dailyRate, recurringForRange, accountsView,
   laborForRange, laborMaps
 };
