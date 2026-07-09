@@ -756,6 +756,31 @@ r.get('/compare', requireOwner, (req, res) => {
   res.json(rows);
 });
 
+// ============ maintenance ============
+// Recompute every stored commission for a location using the CURRENT
+// channel rates. For fixing past days logged while the rates were wrong.
+r.post('/admin/recalc-commissions', requireOwner, checkLocation, (req, res) => {
+  const cats = Object.fromEntries(db.prepare(
+    'SELECT id, commission_percent, commission_invoiced FROM revenue_categories WHERE location_id = ?')
+    .all(req.locationId).map(c => [c.id, c]));
+  const items = db.prepare(
+    `SELECT ri.id, ri.category_id, ri.amount, ri.commission_amount
+     FROM revenue_items ri JOIN revenue_entries re ON re.id = ri.entry_id
+     WHERE re.location_id = ?`).all(req.locationId);
+  const up = db.prepare('UPDATE revenue_items SET commission_amount = ?, commission_invoiced = ? WHERE id = ?');
+  let updated = 0, before = 0, after = 0;
+  for (const it of items) {
+    const cat = cats[it.category_id];
+    if (!cat) continue;
+    const newComm = cat.commission_percent ? it.amount * cat.commission_percent / 100 : 0;
+    before += it.commission_amount;
+    after += newComm;
+    up.run(newComm, cat.commission_invoiced, it.id);
+    updated++;
+  }
+  res.json({ ok: true, updated, before, after, delta: after - before });
+});
+
 // ============ CSV import ============
 // Rows are parsed client-side. type: 'revenue' -> [{date,total}] or [{date,category,amount}]
 //                                type: 'costs'  -> [{date,category,amount,invoiced,description?}]

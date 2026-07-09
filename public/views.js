@@ -1542,6 +1542,10 @@
         ${group('Money accounts', 'accounts', cats.accounts, c =>
           `Opening balance: ${money(c.opening_balance || 0)}`)}
         <div class="hint">Categories with history are archived instead of deleted, so old numbers stay right.</div>
+        <div style="margin-top:12px">
+          <button class="btn tiny" id="recalcComm">↻ Recalculate past commissions with today's rates</button>
+          <div class="hint">Rewrites every logged day's commissions using each channel's current % and invoiced setting. Use after fixing rates that were wrong from the start.</div>
+        </div>
       </div>`;
   }
 
@@ -1618,6 +1622,15 @@
       const r = await api(`/categories/${row.dataset.group}/${row.dataset.id}?${qLoc()}`, { method: 'DELETE' });
       toast(r.archived ? 'Archived (it had history)' : 'Deleted'); render();
     });
+
+    // recalc past commissions with current rates
+    app.querySelector('#recalcComm').onclick = async () => {
+      if (!confirm("Recalculate ALL past days' commissions using each channel's current rate? This replaces what was stored before.")) return;
+      try {
+        const r = await api(`/admin/recalc-commissions?${qLoc()}`, { method: 'POST', body: { location_id: state.locationId } });
+        toast(`${r.updated} entries updated · commissions ${money(r.before)} → ${money(r.after)} (${r.delta >= 0 ? '+' : ''}${money(r.delta)})`);
+      } catch (err) { toast(err.message, true); }
+    };
 
     // locations
     app.querySelector('#addLoc').onclick = async () => {
