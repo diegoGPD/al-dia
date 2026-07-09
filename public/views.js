@@ -1013,6 +1013,8 @@
             <span class="pill ${mtd.netMargin * 100 >= goals.margin ? 'good' : 'bad'}">${mtd.netMargin * 100 >= goals.margin ? 'Met' : 'Below'}</span></strong></div>` : ''}
       </details>
 
+      ${ins.channelStats?.channels?.length ? channelSection(ins.channelStats) : ''}
+
       ${ins.enoughData ? `
       <details class="card">
         <summary class="card-title">Patterns & changes</summary>
@@ -1047,6 +1049,72 @@
 
       <div id="compareSlot"></div>`;
   });
+
+  // ---- sales channels: sold vs actually kept after commissions ----
+  function channelSection(cs) {
+    const totGross = cs.channels.reduce((s, c) => s + c.gross, 0);
+    const totNet = cs.channels.reduce((s, c) => s + c.net, 0);
+    return `
+      <div class="card">
+        <div class="card-title">Sales channels — sold vs kept</div>
+        <div class="be-row"><span>Sold (last 8 weeks)</span><strong>${money(totGross)}</strong></div>
+        <div class="be-row"><span>Actually kept after commissions</span>
+          <strong class="pos">${money(totNet)} <span class="hint">(${totGross > 0 ? Math.round(totNet / totGross * 100) : 100}%)</span></strong></div>
+        ${cs.weekly.length >= 2 ? grossNetChart(cs.weekly) + `
+        <div class="legend"><span><i class="dot rev"></i>Sold</span><span><i class="dot net"></i>Kept after commissions</span></div>` : ''}
+        <div class="ch-list">
+          ${cs.channels.map(c => `
+            <div class="ch-row">
+              <div class="ch-head">
+                <div><strong>${esc(c.name)}</strong>
+                  <span class="hint">${Math.round(c.share * 100)}% of sales${c.bestDay ? ` · strongest: ${c.bestDay}s` : ''}</span></div>
+                <div class="ch-growth ${c.growth === null ? '' : c.growth >= 0 ? 'pos' : 'neg'}">
+                  ${c.growth === null ? '' : (c.growth >= 0 ? '▲ +' : '▼ ') + (c.growth * 100).toFixed(0) + '%'}</div>
+              </div>
+              <div class="ch-bars" title="Sold vs kept">
+                <div class="ch-bar gross" style="width:${totGross > 0 ? Math.max(2, c.gross / cs.channels[0].gross * 100) : 0}%"></div>
+                <div class="ch-bar net" style="width:${totGross > 0 ? Math.max(1, c.net / cs.channels[0].gross * 100) : 0}%"></div>
+              </div>
+              <div class="ch-nums">
+                <span>Sold <strong>${money(c.gross)}</strong></span>
+                <span>− ${(c.rate * 100).toFixed(1)}% comm. (${money(c.commission)})</span>
+                <span>Kept <strong class="pos">${money(c.net)}</strong></span>
+                ${sparkline(c.weekly)}
+              </div>
+            </div>`).join('')}
+        </div>
+        <div class="hint">Growth compares the last 4 weeks to the 4 before. "Kept" is after channel commissions only — food, labor and rent still come out of it.</div>
+      </div>`;
+  }
+
+  function grossNetChart(weekly) {
+    const W = 640, H = 170, PAD = { l: 8, r: 8, t: 12, b: 22 };
+    const max = Math.max(...weekly.map(w => w.gross), 1);
+    const x = i => PAD.l + i * (W - PAD.l - PAD.r) / Math.max(1, weekly.length - 1);
+    const y = v => PAD.t + (1 - v / max) * (H - PAD.t - PAD.b);
+    const line = key => weekly.map((w, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(w[key]).toFixed(1)}`).join('');
+    const gapArea = `M${x(0)},${y(weekly[0].gross)} ${weekly.map((w, i) => `L${x(i)},${y(w.gross)}`).join(' ')}
+      ${weekly.slice().reverse().map((w, i) => `L${x(weekly.length - 1 - i)},${y(w.net)}`).join(' ')} Z`;
+    const labels = [0, weekly.length - 1].map(i =>
+      `<text x="${x(i)}" y="${H - 6}" class="ch-label" text-anchor="${i === 0 ? 'start' : 'end'}">${fmtDate(weekly[i].week, { month: 'short', day: 'numeric' })}</text>`).join('');
+    return `<svg viewBox="0 0 ${W} ${H}" class="chart" preserveAspectRatio="none" role="img" aria-label="Sold vs kept per week">
+      <line x1="${PAD.l}" y1="${H - PAD.b}" x2="${W - PAD.r}" y2="${H - PAD.b}" class="ch-axis"/>
+      <path d="${gapArea}" class="ch-gap"/>
+      <path d="${line('gross')}" class="ch-line rev"/>
+      <path d="${line('net')}" class="ch-line net"/>
+      ${labels}</svg>`;
+  }
+
+  function sparkline(weekly) {
+    const W = 90, H = 26;
+    const max = Math.max(...weekly.map(w => w.gross), 1);
+    const bw = W / weekly.length;
+    return `<svg viewBox="0 0 ${W} ${H}" class="spark" aria-hidden="true">
+      ${weekly.map((w, i) => {
+        const h = Math.max(1.5, w.gross / max * (H - 2));
+        return `<rect x="${(i * bw + 1).toFixed(1)}" y="${(H - h).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" class="spark-bar"/>`;
+      }).join('')}</svg>`;
+  }
 
   registerRoute('insights_bind', (app) => {
     app.querySelectorAll('[data-horizon]').forEach(b => b.onclick = () => {

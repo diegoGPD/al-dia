@@ -709,6 +709,7 @@ r.get('/forecast', checkLocation, (req, res) => {
 
 r.get('/insights', checkLocation, (req, res) => {
   const ins = fc.insights(req.locationId);
+  ins.channelStats = fc.channelBehavior(req.locationId);
   ins.goals = db.prepare('SELECT type, target FROM goals WHERE location_id = ?').all(req.locationId);
   // month-to-date for goal pace + what-if baseline
   const today = new Date().toISOString().slice(0, 10);

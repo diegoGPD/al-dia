@@ -382,6 +382,66 @@ function insights(locationId) {
   return out;
 }
 
+// ---------- per-channel behavior: sold vs actually kept after commission ----------
+function channelBehavior(locationId) {
+  const today = todayStr();
+  const start = addDays(today, -55); // 8 weeks
+  const rows = db.prepare(
+    `SELECT re.date, c.id, c.name, ri.amount, ri.commission_amount
+     FROM revenue_items ri
+     JOIN revenue_entries re ON re.id = ri.entry_id
+     JOIN revenue_categories c ON c.id = ri.category_id
+     WHERE re.location_id = ? AND re.date BETWEEN ? AND ?`)
+    .all(locationId, start, today);
+  if (!rows.length) return { channels: [], weekly: [] };
+
+  const mondayOf = d => addDays(d, -((dow(d) + 6) % 7));
+  const cut = addDays(today, -28);
+  const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  const byChannel = {};
+  const weeklyTotals = {};
+  for (const r of rows) {
+    const ch = byChannel[r.id] = byChannel[r.id] || {
+      name: r.name, gross: 0, commission: 0,
+      recent: 0, prior: 0, weekly: {}, byDow: Array.from({ length: 7 }, () => ({ sum: 0, n: 0 }))
+    };
+    ch.gross += r.amount; ch.commission += r.commission_amount;
+    if (r.date >= cut) ch.recent += r.amount; else ch.prior += r.amount;
+    const wk = mondayOf(r.date);
+    ch.weekly[wk] = ch.weekly[wk] || { gross: 0, net: 0 };
+    ch.weekly[wk].gross += r.amount;
+    ch.weekly[wk].net += r.amount - r.commission_amount;
+    const d = dow(r.date);
+    ch.byDow[d].sum += r.amount; ch.byDow[d].n++;
+    const wt = weeklyTotals[wk] = weeklyTotals[wk] || { week: wk, gross: 0, net: 0 };
+    wt.gross += r.amount; wt.net += r.amount - r.commission_amount;
+  }
+
+  const weeks = Object.keys(weeklyTotals).sort();
+  const totalGross = Object.values(byChannel).reduce((s, c) => s + c.gross, 0);
+  const channels = Object.values(byChannel).map(c => {
+    const samples = c.byDow.reduce((s, d) => s + d.n, 0);
+    let bestDay = null;
+    if (samples >= 8) {
+      const avgs = c.byDow.map((d, i) => ({ day: DAYS[i], avg: d.n ? d.sum / d.n : 0, n: d.n }))
+        .filter(x => x.n >= 2);
+      if (avgs.length >= 2) bestDay = avgs.reduce((b, x) => x.avg > b.avg ? x : b).day;
+    }
+    return {
+      name: c.name,
+      gross: c.gross, commission: c.commission, net: c.gross - c.commission,
+      rate: c.gross > 0 ? c.commission / c.gross : 0,
+      share: totalGross > 0 ? c.gross / totalGross : 0,
+      growth: c.prior > 0 ? (c.recent - c.prior) / c.prior : null,
+      bestDay,
+      weekly: weeks.map(w => ({ week: w, gross: c.weekly[w]?.gross || 0, net: c.weekly[w]?.net || 0 }))
+    };
+  }).sort((a, b) => b.gross - a.gross);
+
+  return { channels, weekly: weeks.map(w => weeklyTotals[w]) };
+}
+
 // Short plain-language summary assembled from the strongest facts.
 function writeSummary(ins) {
   const s = [];
@@ -409,4 +469,4 @@ function writeSummary(ins) {
   return s.slice(0, 4).join(' ');
 }
 
-module.exports = { forecast, accountProjection, upcomingHolidays, insights };
+module.exports = { forecast, accountProjection, upcomingHolidays, insights, channelBehavior };

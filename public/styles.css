@@ -233,6 +233,25 @@ strong.neg { color: var(--red); }
 .whatif input[type="range"] { width: 100%; margin-top: 6px; accent-color: var(--green); }
 .whatif .day-rev { margin-top: 4px; }
 
+/* ---------- channel behavior ---------- */
+.ch-line.net { stroke: #2a9d8f; }
+.dot.net { background: #2a9d8f; }
+.ch-gap { fill: var(--red); opacity: .10; }
+.ch-list { margin-top: 12px; }
+.ch-row { border-top: 1px solid var(--line); padding: 10px 0; }
+.ch-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.ch-head .hint { display: block; }
+.ch-growth { font-size: 13px; font-weight: 700; white-space: nowrap; }
+.ch-growth.pos { color: var(--green-dark); }
+.ch-growth.neg { color: var(--red); }
+.ch-bars { margin: 7px 0 5px; }
+.ch-bar { height: 7px; border-radius: 5px; margin-bottom: 3px; }
+.ch-bar.gross { background: var(--green); opacity: .35; }
+.ch-bar.net { background: #2a9d8f; }
+.ch-nums { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 13px; color: var(--muted); }
+.spark { width: 90px; height: 26px; margin-left: auto; }
+.spark-bar { fill: var(--green); opacity: .55; }
+
 /* ---------- money accounts ---------- */
 .seg.subnav { margin-bottom: 14px; }
 .acc-row { padding: 12px 0; border-bottom: 1px solid var(--line); }
