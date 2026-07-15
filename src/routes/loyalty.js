@@ -160,6 +160,39 @@ function staffRoutes(r) {
     res.json({ ok: true });
   });
 
+  // In-app wallet credential setup (owner). Files land on the server volume;
+  // nothing is ever sent back to the browser.
+  r.post('/loyalty/wallet-config', requireOwner, async (req, res) => {
+    const b = req.body;
+    const out = { ok: true };
+    try {
+      // identifiers
+      const cfg = db.prepare('SELECT * FROM loyalty_config WHERE id = 1').get();
+      db.prepare('UPDATE loyalty_config SET pass_type_id=?, apple_team_id=?, google_issuer_id=? WHERE id=1')
+        .run(
+          b.pass_type_id !== undefined ? ((b.pass_type_id || '').trim() || null) : cfg.pass_type_id,
+          b.apple_team_id !== undefined ? ((b.apple_team_id || '').trim() || null) : cfg.apple_team_id,
+          b.google_issuer_id !== undefined ? ((b.google_issuer_id || '').trim() || null) : cfg.google_issuer_id);
+      // Apple: .p12 straight from Keychain, converted server-side
+      if (b.p12_base64) {
+        if (b.p12_base64.length > 4_000_000) throw new Error('That .p12 file is too large');
+        out.appleCert = passkit.importP12(b.p12_base64, b.p12_password || '');
+      }
+      // Google: service-account key JSON
+      if (b.service_account_json) {
+        out.serviceAccount = gwallet.saveServiceAccount(b.service_account_json);
+      }
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+    const wwdrOk = await passkit.ensureWwdr();
+    out.appleReady = passkit.appleReady();
+    out.googleReady = gwallet.googleReady();
+    if (out.appleCert && !wwdrOk)
+      out.note = "Couldn't download Apple's WWDR certificate yet — save again in a minute.";
+    res.json(out);
+  });
+
   r.get('/loyalty/customers', requireOwner, (req, res) => {
     const rows = db.prepare(
       `SELECT c.id, c.code, c.name, c.phone, c.email, c.created_at,

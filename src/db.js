@@ -266,6 +266,12 @@ for (const table of ['variable_costs', 'oneoff_costs', 'recurring_costs']) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN account_id INTEGER REFERENCES accounts(id)`);
   }
 }
+// Wallet identifiers configured in-app (env vars still win if set).
+if (!hasColumn('loyalty_config', 'pass_type_id')) {
+  db.exec(`ALTER TABLE loyalty_config ADD COLUMN pass_type_id TEXT;
+           ALTER TABLE loyalty_config ADD COLUMN apple_team_id TEXT;
+           ALTER TABLE loyalty_config ADD COLUMN google_issuer_id TEXT;`);
+}
 
 // ---- Default categories for a new location (all fully editable/deletable) ----
 // Commission % values are editable starting points — adjust them in Settings

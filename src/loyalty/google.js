@@ -6,15 +6,20 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { DATA_DIR } = require('../db');
+const SA_DIR = path.join(DATA_DIR, 'wallet');
+
+const { db } = require('../db');
 
 const SA_FILE = path.join(DATA_DIR, 'wallet', 'google-service-account.json');
 const API = 'https://walletobjects.googleapis.com/walletobjects/v1';
 const CLASS_SUFFIX = 'aldia_loyalty';
 
-const googleReady = () => !!(process.env.GOOGLE_WALLET_ISSUER_ID && fs.existsSync(SA_FILE));
+const issuerId = () => process.env.GOOGLE_WALLET_ISSUER_ID ||
+  (db.prepare('SELECT google_issuer_id FROM loyalty_config WHERE id = 1').get() || {}).google_issuer_id || null;
+const googleReady = () => !!(issuerId() && fs.existsSync(SA_FILE));
 const sa = () => JSON.parse(fs.readFileSync(SA_FILE, 'utf8'));
-const classId = () => `${process.env.GOOGLE_WALLET_ISSUER_ID}.${CLASS_SUFFIX}`;
-const objectId = code => `${process.env.GOOGLE_WALLET_ISSUER_ID}.${CLASS_SUFFIX}_${code}`;
+const classId = () => `${issuerId()}.${CLASS_SUFFIX}`;
+const objectId = code => `${issuerId()}.${CLASS_SUFFIX}_${code}`;
 
 const b64url = buf => Buffer.from(buf).toString('base64url');
 function signJwt(payload, account) {
@@ -110,4 +115,14 @@ async function pushUpdate(customer, state, message) {
   } catch (e) { console.error('Google Wallet update:', e.message); }
 }
 
-module.exports = { googleReady, saveLink, pushUpdate };
+// Stores the service-account key uploaded through Settings.
+function saveServiceAccount(jsonText) {
+  const parsed = JSON.parse(jsonText); // throws on bad JSON
+  if (!parsed.client_email || !parsed.private_key)
+    throw new Error('That JSON is not a service-account key (missing client_email/private_key)');
+  fs.mkdirSync(SA_DIR, { recursive: true });
+  fs.writeFileSync(SA_FILE, jsonText, { mode: 0o600 });
+  return parsed.client_email;
+}
+
+module.exports = { googleReady, saveLink, pushUpdate, saveServiceAccount };

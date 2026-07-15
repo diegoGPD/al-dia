@@ -60,6 +60,26 @@
           <a class="btn" href="/loyalty/qr" target="_blank">🖨 Printable signup QR</a>
           <a class="btn" href="/loyalty/join" target="_blank">👀 See signup page</a>
         </div>
+        <details style="margin-top:10px"><summary class="hint">Wallet setup (Apple / Google)</summary>
+          <form id="walletForm" style="margin-top:10px">
+            <p class="hint"><strong>Apple:</strong> export your Pass Type ID certificate from Keychain Access as a .p12 and upload it here — the server converts it itself, no Terminal needed.</p>
+            <div class="row2">
+              <label>Pass Type ID<input name="pass_type_id" value="${esc(cfg.pass_type_id || '')}" placeholder="pass.com.aldia.loyalty"></label>
+              <label>Apple Team ID<input name="apple_team_id" value="${esc(cfg.apple_team_id || '')}" placeholder="A1B2C3D4E5"></label>
+            </div>
+            <div class="row2">
+              <label>Certificate (.p12)<input type="file" name="p12" accept=".p12,.pfx"></label>
+              <label>.p12 password<input type="password" name="p12_password" autocomplete="off"></label>
+            </div>
+            <p class="hint"><strong>Google:</strong> your Issuer ID plus the service-account key JSON.</p>
+            <div class="row2">
+              <label>Google Issuer ID<input name="google_issuer_id" value="${esc(cfg.google_issuer_id || '')}" placeholder="3388000000012345678"></label>
+              <label>Service account key (.json)<input type="file" name="sajson" accept=".json,application/json"></label>
+            </div>
+            <button class="btn primary" type="submit">Save wallet setup</button>
+            <p class="hint">Files are stored only on the server. They're never shown back or sent to any browser.</p>
+          </form>
+        </details>
         <details style="margin-top:10px"><summary class="hint">Customers (${cfg.customers})</summary>
           <div id="custList" class="hint">Loading…</div>
         </details>
@@ -192,6 +212,30 @@
           toast('Program saved'); render();
         } catch (err) { toast(err.message, true); }
       };
+      const wf = app.querySelector('#walletForm');
+      wf.onsubmit = async (e) => {
+        e.preventDefault();
+        const f = new FormData(wf);
+        const body = {
+          pass_type_id: f.get('pass_type_id'), apple_team_id: f.get('apple_team_id'),
+          google_issuer_id: f.get('google_issuer_id')
+        };
+        const p12 = f.get('p12');
+        if (p12 && p12.size) {
+          const buf = new Uint8Array(await p12.arrayBuffer());
+          let bin = ''; buf.forEach(b => bin += String.fromCharCode(b));
+          body.p12_base64 = btoa(bin);
+          body.p12_password = f.get('p12_password') || '';
+        }
+        const sa = f.get('sajson');
+        if (sa && sa.size) body.service_account_json = await sa.text();
+        try {
+          const r = await api('/loyalty/wallet-config', { method: 'POST', body });
+          toast(`Saved — Apple ${r.appleReady ? 'ACTIVE ✓' : 'still incomplete'} · Google ${r.googleReady ? 'ACTIVE ✓' : 'still incomplete'}`);
+          render();
+        } catch (err) { toast(err.message, true); }
+      };
+
       const custBox = app.querySelector('#custList');
       custBox.closest('details').addEventListener('toggle', async function loadOnce(ev) {
         if (!ev.target.open || custBox.dataset.loaded) return;

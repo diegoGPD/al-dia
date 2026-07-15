@@ -19,10 +19,64 @@ const WALLET_DIR = path.join(DATA_DIR, 'wallet');
 const IMG_DIR = path.join(WALLET_DIR, 'images');
 const file = n => path.join(WALLET_DIR, n);
 
+// IDs can come from env vars or from Settings (stored in loyalty_config).
+function getIds() {
+  const row = db.prepare('SELECT pass_type_id, apple_team_id FROM loyalty_config WHERE id = 1').get() || {};
+  return {
+    passTypeId: process.env.PASS_TYPE_ID || row.pass_type_id || null,
+    teamId: process.env.APPLE_TEAM_ID || row.apple_team_id || null
+  };
+}
+
 function appleReady() {
-  return !!(process.env.PASS_TYPE_ID && process.env.APPLE_TEAM_ID &&
+  const { passTypeId, teamId } = getIds();
+  return !!(passTypeId && teamId &&
     fs.existsSync(file('pass_cert.pem')) && fs.existsSync(file('pass_key.pem')) &&
     fs.existsSync(file('wwdr.pem')));
+}
+
+// Apple's WWDR G4 intermediate is public — fetch and cache it automatically
+// so the owner has one less file to deal with.
+async function ensureWwdr() {
+  if (fs.existsSync(file('wwdr.pem'))) return true;
+  try {
+    const res = await fetch('https://www.apple.com/certificateauthority/AppleWWDRCAG4.cer');
+    if (!res.ok) return false;
+    const der = Buffer.from(await res.arrayBuffer());
+    const pem = '-----BEGIN CERTIFICATE-----\n' +
+      der.toString('base64').match(/.{1,64}/g).join('\n') + '\n-----END CERTIFICATE-----\n';
+    fs.mkdirSync(WALLET_DIR, { recursive: true });
+    fs.writeFileSync(file('wwdr.pem'), pem);
+    return true;
+  } catch (e) { console.error('WWDR fetch:', e.message); return false; }
+}
+setTimeout(() => { ensureWwdr(); }, 5000); // warm the cache after boot
+
+// Accepts the .p12 exported straight from Keychain Access and extracts the
+// certificate + key, so the owner never touches openssl.
+function importP12(p12Base64, password) {
+  const forge = require('node-forge');
+  const asn1 = forge.asn1.fromDer(forge.util.decode64(p12Base64));
+  const p12 = forge.pkcs12.pkcs12FromAsn1(asn1, password || '');
+  const certBags = p12.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] || [];
+  const keyBags = [
+    ...(p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag] || []),
+    ...(p12.getBags({ bagType: forge.pki.oids.keyBag })[forge.pki.oids.keyBag] || [])
+  ];
+  if (!certBags.length || !keyBags.length)
+    throw new Error('That .p12 has no certificate + key pair inside');
+  // Pick the leaf cert (the one matching the private key), not any included CA.
+  const key = keyBags[0].key;
+  const keyPem = forge.pki.privateKeyToPem(key);
+  const pubFromKey = forge.pki.rsa.setPublicKey(key.n, key.e);
+  const match = certBags.find(b => {
+    try { return forge.pki.publicKeyToPem(b.cert.publicKey) === forge.pki.publicKeyToPem(pubFromKey); }
+    catch { return false; }
+  }) || certBags[0];
+  fs.mkdirSync(WALLET_DIR, { recursive: true });
+  fs.writeFileSync(file('pass_cert.pem'), forge.pki.certificateToPem(match.cert));
+  fs.writeFileSync(file('pass_key.pem'), keyPem, { mode: 0o600 });
+  return certInfo();
 }
 
 const GREEN = [26, 127, 90];
@@ -34,10 +88,11 @@ function image(name, w, h) {
 
 function passJson(customer, state, baseUrl) {
   const rewardReady = state.rewardsAvailable > 0;
+  const { passTypeId, teamId } = getIds();
   return {
     formatVersion: 1,
-    passTypeIdentifier: process.env.PASS_TYPE_ID,
-    teamIdentifier: process.env.APPLE_TEAM_ID,
+    passTypeIdentifier: passTypeId,
+    teamIdentifier: teamId,
     serialNumber: customer.code,
     organizationName: state.programName,
     description: `${state.programName} — tarjeta de lealtad`,
@@ -142,7 +197,7 @@ function pushUpdate(serial) {
     const req = client.request({
       ':method': 'POST',
       ':path': `/3/device/${reg.push_token}`,
-      'apns-topic': process.env.PASS_TYPE_ID,
+      'apns-topic': getIds().passTypeId,
       'apns-push-type': 'background'
     });
     req.setEncoding('utf8');
@@ -171,4 +226,4 @@ function certInfo() {
   } catch { return null; }
 }
 
-module.exports = { appleReady, buildPkpass, pushUpdate, certInfo, WALLET_DIR };
+module.exports = { appleReady, buildPkpass, pushUpdate, certInfo, importP12, ensureWwdr, WALLET_DIR };
