@@ -5,9 +5,11 @@ const api = require('./src/api');
 
 const app = express();
 app.disable('x-powered-by');
+app.set('trust proxy', 1); // Railway/other proxies: honor X-Forwarded-Proto
 app.use(express.json({ limit: '2mb' }));
 
 app.use('/api', api);
+app.use(require('./src/loyalty/pages')); // public: /loyalty/join, /card/:code, /loyalty/qr
 
 // Static frontend
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));

@@ -146,6 +146,49 @@ CREATE TABLE IF NOT EXISTS transfers (
 );
 CREATE INDEX IF NOT EXISTS idx_transfers_loc_date ON transfers(location_id, date);
 
+-- ===== Customer loyalty (one shared program across locations) =====
+CREATE TABLE IF NOT EXISTS loyalty_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  program_name TEXT NOT NULL DEFAULT 'Al Día Rewards',
+  stamps_needed INTEGER NOT NULL DEFAULT 10,
+  reward_text TEXT NOT NULL DEFAULT 'Un platillo gratis',
+  active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS customers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT NOT NULL UNIQUE,          -- what their QR encodes
+  auth_token TEXT NOT NULL,           -- PassKit web-service auth for this pass
+  name TEXT NOT NULL,
+  phone TEXT,
+  email TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS loyalty_visits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  location_id INTEGER REFERENCES locations(id),
+  visited_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_visits_customer ON loyalty_visits(customer_id);
+
+CREATE TABLE IF NOT EXISTS loyalty_redemptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  location_id INTEGER REFERENCES locations(id),
+  redeemed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Apple Wallet device registrations (PassKit web service protocol)
+CREATE TABLE IF NOT EXISTS wallet_registrations (
+  device_id TEXT NOT NULL,
+  push_token TEXT NOT NULL,
+  serial TEXT NOT NULL,               -- customer code
+  PRIMARY KEY (device_id, serial)
+);
+
 -- Performance targets (one per type per location).
 CREATE TABLE IF NOT EXISTS goals (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -275,6 +318,8 @@ function seedCategories(locationId) {
   const insAcc = db.prepare('INSERT INTO accounts (location_id, name, position) VALUES (?,?,?)');
   DEFAULTS.accounts.forEach((name, i) => insAcc.run(locationId, name, i));
 }
+
+db.exec(`INSERT OR IGNORE INTO loyalty_config (id) VALUES (1)`);
 
 function createLocation(name) {
   const { lastInsertRowid } = db.prepare('INSERT INTO locations (name) VALUES (?)').run(name);

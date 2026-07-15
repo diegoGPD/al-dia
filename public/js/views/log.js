@@ -11,6 +11,8 @@
   registerRoute('log', async () => `
     <h2 class="page-title">Log something</h2>
     <div class="log-menu">
+      <a href="#/scan" class="log-tile"><span class="log-icon">🎟️</span>
+        <div><strong>Scan loyalty card</strong><div class="hint">Stamp a customer's visit</div></div></a>
       <a href="#/log-revenue" class="log-tile"><span class="log-icon">💰</span>
         <div><strong>Sales</strong><div class="hint">What came in today</div></div></a>
       <a href="#/log-costs" class="log-tile"><span class="log-icon">🛒</span>

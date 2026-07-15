@@ -13,6 +13,7 @@
     if (isOwner()) {
       const cats = await api(`/categories?${qLoc()}`);
       parts.push(categoriesSection(cats));
+      parts.push(await loyaltySection());
       parts.push(await locationsSection());
       parts.push(await usersSection());
       parts.push(importSection());
@@ -26,6 +27,37 @@
       </div>`);
     return parts.join('');
   });
+
+  async function loyaltySection() {
+    const cfg = await api(`/loyalty/config?${qLoc()}`);
+    return `
+      <div class="card">
+        <div class="card-title">Loyalty program</div>
+        <form id="loyaltyForm">
+          <label>Program name<input name="program_name" value="${esc(cfg.program_name)}"></label>
+          <div class="row2">
+            <label>Stamps for a reward<input type="number" min="2" max="50" name="stamps_needed" value="${cfg.stamps_needed}"></label>
+            <label>The reward<input name="reward_text" value="${esc(cfg.reward_text)}"></label>
+          </div>
+          <label class="inv-toggle big"><input type="checkbox" name="active" ${cfg.active ? 'checked' : ''}>Program active (signups open)</label>
+          <button class="btn primary" type="submit">Save program</button>
+        </form>
+        <div class="be-row" style="margin-top:14px"><span>Customers signed up</span><strong>${cfg.customers}</strong></div>
+        <div class="be-row"><span>Visits stamped this month</span><strong>${cfg.visitsThisMonth}</strong></div>
+        <div class="be-row"><span>Apple Wallet</span>
+          <span class="pill ${cfg.appleReady ? 'good' : 'warn'}">${cfg.appleReady ? 'Active' : 'Not configured'}</span></div>
+        <div class="be-row"><span>Google Wallet</span>
+          <span class="pill ${cfg.googleReady ? 'good' : 'warn'}">${cfg.googleReady ? 'Active' : 'Not configured'}</span></div>
+        ${!cfg.appleReady || !cfg.googleReady ? `<div class="hint">Customers get the web card either way. To enable the wallet buttons, follow docs/WALLET-SETUP.md in the project.</div>` : ''}
+        <div class="quick-actions" style="margin-top:12px">
+          <a class="btn" href="/loyalty/qr" target="_blank">🖨 Printable signup QR</a>
+          <a class="btn" href="/loyalty/join" target="_blank">👀 See signup page</a>
+        </div>
+        <details style="margin-top:10px"><summary class="hint">Customers (${cfg.customers})</summary>
+          <div id="custList" class="hint">Loading…</div>
+        </details>
+      </div>`;
+  }
 
   function categoriesSection(cats) {
     const group = (title, group, list, extra) => `
@@ -138,6 +170,39 @@
       const r = await api(`/categories/${row.dataset.group}/${row.dataset.id}?${qLoc()}`, { method: 'DELETE' });
       toast(r.archived ? 'Archived (it had history)' : 'Deleted'); render();
     });
+
+    // loyalty program
+    const lf = app.querySelector('#loyaltyForm');
+    if (lf) {
+      lf.onsubmit = async (e) => {
+        e.preventDefault();
+        const f = new FormData(lf);
+        try {
+          await api(`/loyalty/config?${qLoc()}`, { method: 'PUT', body: {
+            location_id: state.locationId,
+            program_name: f.get('program_name'), stamps_needed: Number(f.get('stamps_needed')),
+            reward_text: f.get('reward_text'), active: f.get('active') === 'on' } });
+          toast('Program saved'); render();
+        } catch (err) { toast(err.message, true); }
+      };
+      const custBox = app.querySelector('#custList');
+      custBox.closest('details').addEventListener('toggle', async function loadOnce(ev) {
+        if (!ev.target.open || custBox.dataset.loaded) return;
+        custBox.dataset.loaded = '1';
+        const rows = await api('/loyalty/customers');
+        custBox.innerHTML = rows.length ? rows.map(c => `
+          <div class="list-row" data-cust="${c.id}">
+            <div><strong>${esc(c.name)}</strong>
+              <div class="hint">${esc(c.phone || c.email || '')} · ${c.visits} visits · ${c.redeemed} redeemed · ${esc(c.code)}</div></div>
+            <button class="icon-btn danger del-cust" aria-label="Delete">✕</button>
+          </div>`).join('') : 'No customers yet.';
+        custBox.querySelectorAll('.del-cust').forEach(b => b.onclick = async () => {
+          if (!confirm('Delete this customer and all their data?')) return;
+          await api(`/loyalty/customers/${b.closest('.list-row').dataset.cust}`, { method: 'DELETE' });
+          toast('Deleted'); render();
+        });
+      });
+    }
 
     // recalc past commissions with current rates
     app.querySelector('#recalcComm').onclick = async () => {

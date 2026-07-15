@@ -58,6 +58,13 @@ npm start        # http://localhost:3000
 ### Benchmarks
 The dashboard compares your food, labor, prime, occupancy and net-margin percentages against **general industry ranges** (clearly labeled — they're not your targets) and flags anything well outside them. Tag categories in Settings ("counts as food / labor / occupancy") to keep these accurate.
 
+## Customer loyalty cards
+A shared stamp program across all locations. Print the signup QR (Settings → Loyalty → printable QR) for a table tent; customers scan it, sign up with just a name and phone/email, and get a live digital card at `/card/<code>` with their own QR, stamp progress, and reward status — updated automatically after every visit. Staff stamp visits from **Log → Scan loyalty card** (phone camera; one stamp per customer per day) and redeem rewards from the same screen. Configure the program (name, stamps needed, reward) in Settings.
+
+**Apple Wallet / Google Wallet**: fully implemented (signed `.pkpass` with automatic updates + lock-screen notices via APNs; Save-to-Google-Wallet with card messages) but dormant until you add your credentials — the buttons appear on customer cards automatically once configured. Follow **docs/WALLET-SETUP.md**; it also explains the honest notification limits (wallet passes notify on card changes; use WhatsApp/SMS for marketing campaigns) and the yearly Apple certificate renewal you must not miss.
+
+**Privacy**: only name + contact + visit dates are stored. Customers can delete their own data from their card page; you can delete anyone from Settings → Loyalty.
+
 ## Forecast & insights
 From the dashboard, **Forecast & insights** projects the next 7 and 30 days from your own history: weekday patterns (Fridays ≠ Tuesdays), recent trend, exact upcoming recurring costs, and — importantly — cost and commission ratios *learned from your recent weeks*, so when your channel mix shifts toward delivery apps, the forecast's commission burden shifts with it. Projections show a range, a confidence note tied to how much history exists, projected break-even status, and a rough cash-position projection per money account. Estimates from your own data, not guarantees — and not financial advice.
 

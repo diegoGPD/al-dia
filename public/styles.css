@@ -312,6 +312,11 @@ details[open].card > summary { margin-bottom: 12px; }
   .modal { border-radius: 18px; }
 }
 
+/* ---------- loyalty scan ---------- */
+.stamps-row { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: 12px 0; }
+.stamp-dot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--green); background: #fff; }
+.stamp-dot.on { background: var(--green); }
+
 /* ---------- toast & loading ---------- */
 #toast {
   position: fixed; bottom: calc(92px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%) translateY(20px);
