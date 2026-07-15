@@ -158,4 +158,17 @@ function pushUpdate(serial) {
   }
 }
 
-module.exports = { appleReady, buildPkpass, pushUpdate, WALLET_DIR };
+// Certificate expiry, for the Settings reminder — passes can't be issued or
+// updated once the Pass Type ID certificate lapses.
+function certInfo() {
+  if (!fs.existsSync(file('pass_cert.pem'))) return null;
+  try {
+    const forge = require('node-forge');
+    const cert = forge.pki.certificateFromPem(fs.readFileSync(file('pass_cert.pem'), 'utf8'));
+    const expires = cert.validity.notAfter;
+    const daysLeft = Math.floor((expires.getTime() - Date.now()) / 864e5);
+    return { expires: expires.toISOString().slice(0, 10), daysLeft };
+  } catch { return null; }
+}
+
+module.exports = { appleReady, buildPkpass, pushUpdate, certInfo, WALLET_DIR };

@@ -143,6 +143,7 @@ function staffRoutes(r) {
       visitsThisMonth: db.prepare(
         `SELECT COUNT(*) c FROM loyalty_visits WHERE visited_at >= date('now','start of month')`).get().c,
       appleReady: passkit.appleReady(),
+      appleCert: passkit.certInfo(),
       googleReady: gwallet.googleReady(),
       joinUrl: `${baseUrl(req)}/loyalty/join`
     });

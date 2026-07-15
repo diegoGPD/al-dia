@@ -88,8 +88,18 @@ router.get('/card/:code', (req, res) => {
     <div id="qr"></div>
     <div class="code">${esc(s.code)}</div>
     <p class="hint" style="text-align:center">Muestra este código en caja en cada visita.</p>
-    ${passkit.appleReady() ? `<a class="btn" href="/api/loyalty/pass/${esc(s.code)}">📲 Agregar a Apple Wallet</a>` : ''}
-    ${gwallet.googleReady() ? `<a class="btn" style="background:#1f1f1f" href="/api/loyalty/gpay/${esc(s.code)}">📲 Guardar en Google Wallet</a>` : ''}
+    ${(() => {
+      // Show the wallet button that matches the visitor's device;
+      // desktops/unknowns see whichever are configured.
+      const ua = req.get('user-agent') || '';
+      const isApple = /iPhone|iPad|iPod/i.test(ua);
+      const isAndroid = /Android/i.test(ua);
+      const appleBtn = passkit.appleReady() ? `<a class="btn" href="/api/loyalty/pass/${esc(s.code)}">📲 Agregar a Apple Wallet</a>` : '';
+      const googleBtn = gwallet.googleReady() ? `<a class="btn" style="background:#1f1f1f" href="/api/loyalty/gpay/${esc(s.code)}">📲 Guardar en Google Wallet</a>` : '';
+      if (isApple) return appleBtn || googleBtn;
+      if (isAndroid) return googleBtn || appleBtn;
+      return appleBtn + googleBtn;
+    })()}
     <p class="hint no-print" style="margin-top:16px">💡 Guarda esta página en tu pantalla de inicio para tenerla siempre a la mano. Se actualiza sola en cada visita.</p>
     <button class="btn ghost no-print" id="del">Borrar mi tarjeta y mis datos</button>
     <script src="${QR_LIB}"></script>

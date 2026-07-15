@@ -45,9 +45,16 @@
         <div class="be-row" style="margin-top:14px"><span>Customers signed up</span><strong>${cfg.customers}</strong></div>
         <div class="be-row"><span>Visits stamped this month</span><strong>${cfg.visitsThisMonth}</strong></div>
         <div class="be-row"><span>Apple Wallet</span>
-          <span class="pill ${cfg.appleReady ? 'good' : 'warn'}">${cfg.appleReady ? 'Active' : 'Not configured'}</span></div>
+          <span class="pill ${cfg.appleReady ? (cfg.appleCert && cfg.appleCert.daysLeft < 45 ? 'warn' : 'good') : 'warn'}">${cfg.appleReady ? 'Active' : 'Not configured'}</span></div>
+        ${cfg.appleCert ? (() => {
+          const c = cfg.appleCert;
+          if (c.daysLeft < 0) return `<div class="status-banner bad" style="padding:10px"><div class="status-sub">⚠️ Your Apple pass certificate EXPIRED on ${c.expires}. New passes can't be issued and existing ones won't update until you renew it (docs/WALLET-SETUP.md, steps 3–6).</div></div>`;
+          if (c.daysLeft < 45) return `<div class="status-banner warn" style="padding:10px"><div class="status-sub">⚠️ Your Apple pass certificate expires in ${c.daysLeft} days (${c.expires}). Renew it before then or passes stop updating — see docs/WALLET-SETUP.md.</div></div>`;
+          return `<div class="hint">Apple certificate valid until ${c.expires} (${c.daysLeft} days). You'll see a warning here 45 days before it expires.</div>`;
+        })() : ''}
         <div class="be-row"><span>Google Wallet</span>
           <span class="pill ${cfg.googleReady ? 'good' : 'warn'}">${cfg.googleReady ? 'Active' : 'Not configured'}</span></div>
+        ${cfg.googleReady ? `<div class="hint">Reminder: until Google grants your issuer account <strong>publishing access</strong> (request it in the Google Pay & Wallet Console), only test accounts you've added there can save the card. Real customers need publishing approval.</div>` : ''}
         ${!cfg.appleReady || !cfg.googleReady ? `<div class="hint">Customers get the web card either way. To enable the wallet buttons, follow docs/WALLET-SETUP.md in the project.</div>` : ''}
         <div class="quick-actions" style="margin-top:12px">
           <a class="btn" href="/loyalty/qr" target="_blank">🖨 Printable signup QR</a>
