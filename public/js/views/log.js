@@ -250,7 +250,7 @@
         ${list.map(o => `
           <div class="list-row" data-oneoff='${esc(JSON.stringify({ id: o.id, date: o.date, description: o.description, amount: o.amount, invoiced: o.invoiced, account_id: o.account_id }))}'>
             <div><strong>${esc(o.description)}</strong>
-              <div class="hint">${fmtDate(o.date)} · ${o.invoiced ? 'Invoiced' : 'Not invoiced'}</div></div>
+              <div class="hint">${fmtDate(o.date)} · ${o.invoiced ? 'Invoiced' : 'Not invoiced'}${o.logged_by ? ' · by ' + esc(o.logged_by) : ''}${o.receipt ? ` · <a href="/api/oneoff/${o.id}/receipt" target="_blank">📎 receipt</a>` : ''}</div></div>
             <div class="list-right">${money(o.amount)}
               <button class="icon-btn edit-oneoff" aria-label="Edit">✎</button>
               <button class="icon-btn danger del-oneoff" data-id="${o.id}" aria-label="Delete">✕</button></div>

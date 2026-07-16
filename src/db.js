@@ -289,6 +289,18 @@ if (!hasColumn('locations', 'pd_store_id')) {
            CREATE INDEX IF NOT EXISTS idx_pd_orders_loc_date ON pd_orders(location_id, date);`);
 }
 
+// Quick-entry links (write-only cost form, one per user, revocable).
+if (!hasColumn('oneoff_costs', 'receipt')) {
+  db.exec(`ALTER TABLE oneoff_costs ADD COLUMN receipt TEXT;
+           ALTER TABLE oneoff_costs ADD COLUMN logged_by TEXT;
+           CREATE TABLE IF NOT EXISTS quick_links (
+             token TEXT PRIMARY KEY,
+             user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+             active INTEGER NOT NULL DEFAULT 1,
+             created_at TEXT NOT NULL DEFAULT (datetime('now'))
+           );`);
+}
+
 // Per-location secret for the inbound POS webhook.
 if (!hasColumn('locations', 'webhook_token')) {
   db.exec(`ALTER TABLE locations ADD COLUMN webhook_token TEXT;

@@ -6,10 +6,11 @@ const api = require('./src/api');
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1); // Railway/other proxies: honor X-Forwarded-Proto
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '10mb' })); // receipt photos ride in JSON
 
 app.use('/api', api);
 app.use(require('./src/loyalty/pages')); // public: /loyalty/join, /card/:code, /loyalty/qr
+app.use(require('./src/routes/quick').pagesRouter()); // public: /go/:token quick cost entry
 
 // Static frontend
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));

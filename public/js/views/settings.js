@@ -203,7 +203,8 @@
   }
 
   async function usersSection() {
-    const users = await api('/users');
+    const [users, qlinks] = await Promise.all([api('/users'), api('/quick-links')]);
+    const linkFor = Object.fromEntries(qlinks.filter(q => q.active).map(q => [q.user_id, q.url]));
     return `
       <div class="card">
         <div class="card-title">People</div>
@@ -211,7 +212,12 @@
           <div class="list-row" data-user="${u.id}">
             <div><strong>${esc(u.name)}</strong>
               <div class="hint">${esc(u.email)} · ${u.role === 'owner' ? 'Owner — everything' :
-                'Manager — ' + (u.locationIds || []).map(id => esc(state.me.locations.find(l => l.id === id)?.name || '?')).join(', ')}</div></div>
+                'Manager — ' + (u.locationIds || []).map(id => esc(state.me.locations.find(l => l.id === id)?.name || '?')).join(', ')}</div>
+              <div class="hint">${linkFor[u.id]
+                ? `⚡ Quick cost link active
+                   <a href="#" class="ql-copy" data-url="${esc(linkFor[u.id])}">copy</a> ·
+                   <a href="#" class="ql-revoke" data-user="${u.id}">revoke</a>`
+                : `<a href="#" class="ql-create" data-user="${u.id}">⚡ Create quick cost link</a>`}</div></div>
             ${u.role !== 'owner' ? `<div class="list-right">
               <button class="icon-btn edit-user" aria-label="Edit">✎</button>
               <button class="icon-btn danger del-user" aria-label="Remove">✕</button></div>` : ''}
@@ -396,6 +402,25 @@
           state.locationId = state.me.locations[0]?.id;
         render();
       } catch (err) { toast(err.message, true); }
+    });
+
+    // quick cost links
+    app.querySelectorAll('.ql-create').forEach(a => a.onclick = async (e) => {
+      e.preventDefault();
+      const r = await api(`/quick-links/${a.dataset.user}`, { method: 'POST' });
+      await navigator.clipboard.writeText(r.url).catch(() => {});
+      toast('Link created & copied — send it to them privately'); render();
+    });
+    app.querySelectorAll('.ql-copy').forEach(a => a.onclick = async (e) => {
+      e.preventDefault();
+      await navigator.clipboard.writeText(a.dataset.url);
+      toast('Link copied');
+    });
+    app.querySelectorAll('.ql-revoke').forEach(a => a.onclick = async (e) => {
+      e.preventDefault();
+      if (!confirm('Revoke this link? Their page stops working immediately (you can create a new one any time).')) return;
+      await api(`/quick-links/${a.dataset.user}`, { method: 'DELETE' });
+      toast('Link revoked'); render();
     });
 
     // users
