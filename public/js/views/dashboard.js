@@ -75,6 +75,13 @@
           <div class="stat-value">${money(c.revenue)}</div>${delta(c.revenue, p.revenue)}</div>
         <div class="stat-card"><div class="stat-label">Money out</div>
           <div class="stat-value">${money(c.costs.total)}</div>${delta(c.costs.total, p.costs.total, true)}</div>
+        <div class="stat-card"><div class="stat-label">Commissions</div>
+          <div class="stat-value">${money(c.costs.commissions)}</div>
+          <div class="stat-sub">${c.revenue > 0 ? pct(c.costs.commissions / c.revenue) + ' of sales' : ''}</div>
+          ${delta(c.costs.commissions, p.costs.commissions, true)}</div>
+        <div class="stat-card"><div class="stat-label">Kept after commissions</div>
+          <div class="stat-value">${money(c.revenue - c.costs.commissions)}</div>
+          ${delta(c.revenue - c.costs.commissions, p.revenue - p.costs.commissions)}</div>
         <div class="stat-card wide ${c.profit >= 0 ? 'profit' : 'loss'}">
           <div class="stat-label">What you kept</div>
           <div class="stat-value">${money(c.profit)}</div>

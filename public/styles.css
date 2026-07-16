@@ -340,6 +340,6 @@ details[open].card > summary { margin-bottom: 12px; }
 /* ---------- desktop ---------- */
 @media (min-width: 720px) {
   .content { padding-top: 24px; }
-  .stat-grid { grid-template-columns: 1fr 1fr 2fr; }
-  .stat-card.wide { grid-column: auto; }
+  .stat-grid { grid-template-columns: 1fr 1fr 1fr 1fr; }
+  .stat-card.wide { grid-column: 1 / -1; }
 }
