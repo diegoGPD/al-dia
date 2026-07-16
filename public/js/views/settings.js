@@ -88,8 +88,26 @@
   }
 
   async function posSection() {
-    const info = await api(`/webhooks/pos-info?${qLoc()}`);
-    const badge = { processed: 'good', stored: 'warn', error: 'bad' };
+    const [info, pdInfo] = await Promise.all([
+      api(`/webhooks/pos-info?${qLoc()}`),
+      api(`/webhooks/pd-status?${qLoc()}`)
+    ]);
+    const badge = { processed: 'good', stored: 'warn', error: 'bad', tracked: '' };
+    const pdBlock = `
+      <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:12px">
+        <strong>PideDirecto</strong>
+        <div class="be-row" style="margin-top:6px"><span>API key on server</span>
+          <span class="pill ${pdInfo.apiKeyPresent ? 'good' : 'warn'}">${pdInfo.apiKeyPresent ? 'Present' : 'Missing — set PIDEDIRECTO_API_KEY in Railway'}</span></div>
+        <div class="be-row"><span>Completed orders today / total tracked</span>
+          <strong>${pdInfo.ordersToday} / ${pdInfo.totalOrders}</strong></div>
+        <form id="pdForm" class="row2" style="margin-top:6px">
+          <label>Store ID (this location)
+            <input name="pd_store_id" value="${esc(pdInfo.storeId || '')}" placeholder="77185c4a-1ccd-48e9-…"></label>
+          <button class="btn primary" type="submit" style="align-self:end">Save</button>
+        </form>
+        <button class="btn tiny" id="pdReconcile">↻ Reconcile last 3 days now</button>
+        <div class="hint">Orders arriving on the webhook above log themselves (completed orders only; cancellations reverse automatically, retries never double-count). The reconciler also runs every 6 hours as a safety net for missed webhooks.</div>
+      </div>`;
     return `
       <div class="card">
         <div class="card-title">POS webhook (this location)</div>
@@ -101,6 +119,7 @@
           <button class="btn" id="whCopy">📋 Copy URL</button>
           <button class="btn" id="whRegen">↻ Regenerate (invalidates old URL)</button>
         </div>
+        ${pdBlock}
         ${info.events.length ? `
         <details style="margin-top:10px"><summary class="hint">Recent deliveries (${info.events.length})</summary>
           ${info.events.map(e => `
@@ -272,9 +291,22 @@
           toast('URL copied');
         };
         app.querySelector('#whRegen').onclick = async () => {
-          if (!confirm('Regenerate? Your POS must be updated with the new URL.')) return;
+          if (!confirm('Regenerate? Anything already posting to this URL (your POS, PideDirecto) will STOP working until their team is given the new URL. Are you sure?')) return;
           await api(`/webhooks/pos-regenerate?${qLoc()}`, { method: 'POST', body: { location_id: state.locationId } });
           toast('New URL generated'); render();
+        };
+        app.querySelector('#pdForm').onsubmit = async (e) => {
+          e.preventDefault();
+          await api(`/webhooks/pd-config?${qLoc()}`, { method: 'POST', body: {
+            location_id: state.locationId, pd_store_id: new FormData(e.target).get('pd_store_id') } });
+          toast('PideDirecto store saved'); render();
+        };
+        app.querySelector('#pdReconcile').onclick = async () => {
+          try {
+            const r = await api(`/webhooks/pd-reconcile?${qLoc()}`, { method: 'POST', body: { location_id: state.locationId } });
+            toast(r.skipped ? `Skipped: ${r.reason}` : `Reconciled ${r.orders} orders, ${r.daysRebuilt} days rebuilt`);
+            render();
+          } catch (err) { toast(err.message, true); }
         };
       }
 

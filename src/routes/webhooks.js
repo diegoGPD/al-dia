@@ -15,6 +15,7 @@ const { requireOwner, checkLocation } = require('../auth');
 const { num } = require('../lib/parse');
 const { badDate, todayStr } = require('../lib/dates');
 const { upsertDayRevenue } = require('../lib/revenue');
+const pd = require('../integrations/pidedirecto');
 
 function tokenFor(locationId) {
   let row = db.prepare('SELECT webhook_token FROM locations WHERE id = ?').get(locationId);
@@ -65,6 +66,13 @@ function publicRoutes(r) {
 
     let status = 'stored', note = 'Stored — format not recognized for auto-logging';
     try {
+      // PideDirecto order events take priority on this same URL.
+      if (pd.looksLikePideDirecto(req.body)) {
+        const r = pd.processWebhook(loc.id, req.body);
+        db.prepare('UPDATE pos_events SET status = ?, note = ? WHERE id = ?')
+          .run(r.status, r.note, Number(evt.lastInsertRowid));
+        return res.json({ ok: true, ...r });
+      }
       const data = interpret(req.body || {}, loc.id);
       if (data) {
         const result = upsertDayRevenue(loc.id, data.date, {
@@ -96,6 +104,22 @@ function staffRoutes(r) {
         `SELECT id, received_at, status, note, substr(payload, 1, 400) payload
          FROM pos_events WHERE location_id = ? ORDER BY id DESC LIMIT 15`).all(req.locationId)
     });
+  });
+
+  // PideDirecto per-location config + manual reconciliation
+  r.get('/webhooks/pd-status', requireOwner, checkLocation, (req, res) => {
+    res.json(pd.statusFor(req.locationId));
+  });
+
+  r.post('/webhooks/pd-config', requireOwner, checkLocation, (req, res) => {
+    const id = (req.body.pd_store_id || '').trim() || null;
+    db.prepare('UPDATE locations SET pd_store_id = ? WHERE id = ?').run(id, req.locationId);
+    res.json({ ok: true, ...pd.statusFor(req.locationId) });
+  });
+
+  r.post('/webhooks/pd-reconcile', requireOwner, checkLocation, async (req, res) => {
+    try { res.json(await pd.reconcileLocation(req.locationId, Number(req.body.days) || 3)); }
+    catch (e) { res.status(502).json({ error: e.message }); }
   });
 
   r.post('/webhooks/pos-regenerate', requireOwner, checkLocation, (req, res) => {

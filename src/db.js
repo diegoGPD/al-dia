@@ -272,6 +272,23 @@ if (!hasColumn('loyalty_config', 'pass_type_id')) {
            ALTER TABLE loyalty_config ADD COLUMN apple_team_id TEXT;
            ALTER TABLE loyalty_config ADD COLUMN google_issuer_id TEXT;`);
 }
+// PideDirecto: per-location store id + order ledger (idempotency by order id).
+if (!hasColumn('locations', 'pd_store_id')) {
+  db.exec(`ALTER TABLE locations ADD COLUMN pd_store_id TEXT;
+           CREATE TABLE IF NOT EXISTS pd_orders (
+             order_id TEXT PRIMARY KEY,
+             location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+             date TEXT NOT NULL,
+             channel TEXT,
+             payment_method TEXT,
+             amount REAL NOT NULL DEFAULT 0,
+             status TEXT NOT NULL DEFAULT 'OTHER',
+             source TEXT NOT NULL DEFAULT 'webhook',
+             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+           );
+           CREATE INDEX IF NOT EXISTS idx_pd_orders_loc_date ON pd_orders(location_id, date);`);
+}
+
 // Per-location secret for the inbound POS webhook.
 if (!hasColumn('locations', 'webhook_token')) {
   db.exec(`ALTER TABLE locations ADD COLUMN webhook_token TEXT;

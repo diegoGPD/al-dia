@@ -21,5 +21,8 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong' });
 });
 
+// PideDirecto reconciliation safety net (no-op until API key + store id exist)
+require('./src/integrations/pidedirecto').startReconciler();
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Al Día running on port ${PORT}`));
