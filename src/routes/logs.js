@@ -3,6 +3,7 @@ const { db } = require('../db');
 const { requireOwner, checkLocation } = require('../auth');
 const { num, bool01 } = require('../lib/parse');
 const { badDate, todayStr, addDays } = require('../lib/dates');
+const { upsertDayRevenue } = require('../lib/revenue');
 const calc = require('../calc');
 
 module.exports = (r) => {
@@ -18,48 +19,19 @@ module.exports = (r) => {
     res.json({ entry: entry || null, items, accountItems });
   });
 
-  // Upsert a day's revenue. Channel commissions are computed and stored here;
-  // the optional account split is stored independently.
+  // Upsert a day's revenue. Channel commissions are computed and stored by the
+  // shared helper; the optional account split is stored independently.
   r.put('/revenue', checkLocation, (req, res) => {
     const { date, total, items, note, accounts } = req.body;
     if (badDate(date)) return res.status(400).json({ error: 'Invalid date' });
-    const breakdown = Array.isArray(items) ? items.filter(i => num(i.amount) !== 0) : [];
-    const finalTotal = breakdown.length ? breakdown.reduce((s, i) => s + num(i.amount), 0) : num(total);
-    if (finalTotal < 0) return res.status(400).json({ error: 'Revenue cannot be negative' });
-
-    const existing = db.prepare('SELECT id FROM revenue_entries WHERE location_id = ? AND date = ?').get(req.locationId, date);
-    let entryId;
-    if (existing) {
-      entryId = existing.id;
-      db.prepare('UPDATE revenue_entries SET total = ?, note = ? WHERE id = ?').run(finalTotal, note || null, entryId);
-      db.prepare('DELETE FROM revenue_items WHERE entry_id = ?').run(entryId);
-      db.prepare('DELETE FROM revenue_account_items WHERE entry_id = ?').run(entryId);
-    } else {
-      entryId = Number(db.prepare(
-        'INSERT INTO revenue_entries (location_id, date, total, note) VALUES (?,?,?,?)')
-        .run(req.locationId, date, finalTotal, note || null).lastInsertRowid);
-    }
-    const catById = Object.fromEntries(db.prepare(
-      'SELECT id, commission_percent, commission_invoiced FROM revenue_categories WHERE location_id = ?')
-      .all(req.locationId).map(c => [c.id, c]));
-    const ins = db.prepare(
-      'INSERT INTO revenue_items (entry_id, category_id, amount, commission_amount, commission_invoiced) VALUES (?,?,?,?,?)');
-    let commissions = 0;
-    breakdown.forEach(i => {
-      const cat = catById[Number(i.category_id)];
-      const commission = cat && cat.commission_percent ? num(i.amount) * cat.commission_percent / 100 : 0;
-      commissions += commission;
-      ins.run(entryId, Number(i.category_id), num(i.amount), commission, cat ? cat.commission_invoiced : 0);
-    });
-    if (Array.isArray(accounts)) {
-      const valid = new Set(db.prepare('SELECT id FROM accounts WHERE location_id = ?')
-        .all(req.locationId).map(a => a.id));
-      const insAcc = db.prepare(
-        'INSERT INTO revenue_account_items (entry_id, account_id, amount) VALUES (?,?,?)');
-      accounts.filter(a => valid.has(Number(a.account_id)) && num(a.amount) !== 0)
-        .forEach(a => insAcc.run(entryId, Number(a.account_id), num(a.amount)));
-    }
-    res.json({ ok: true, total: finalTotal, commissions });
+    try {
+      const result = upsertDayRevenue(req.locationId, date, {
+        total, note: note || null,
+        items: Array.isArray(items) ? items : [],
+        accounts: Array.isArray(accounts) ? accounts : []
+      });
+      res.json({ ok: true, ...result });
+    } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
   // Move a whole day's revenue log to a different date (wrong-day fixes).

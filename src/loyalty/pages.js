@@ -125,6 +125,8 @@ router.get('/loyalty/qr', (req, res) => {
     <div id="qr"></div>
     <p class="hint" style="text-align:center">${esc(joinUrl)}</p>
     <button class="btn no-print" onclick="print()">🖨 Imprimir</button>
+    <p class="hint no-print" style="margin-top:12px">💡 ¿Prefieres NFC? Graba esta misma dirección en un sticker NFC
+      (NTAG213/216, con una app gratuita como "NFC Tools") y pégalo en la mesa — un toque del teléfono abre el registro.</p>
     <script src="${QR_LIB}"></script>
     <script>new QRCode(document.getElementById('qr'), { text: ${JSON.stringify(joinUrl)}, width: 240, height: 240 });</script>`));
 });

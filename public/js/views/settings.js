@@ -14,6 +14,7 @@
       const cats = await api(`/categories?${qLoc()}`);
       parts.push(categoriesSection(cats));
       parts.push(await loyaltySection());
+      parts.push(await posSection());
       parts.push(await locationsSection());
       parts.push(await usersSection());
       parts.push(importSection());
@@ -83,6 +84,33 @@
         <details style="margin-top:10px"><summary class="hint">Customers (${cfg.customers})</summary>
           <div id="custList" class="hint">Loading…</div>
         </details>
+      </div>`;
+  }
+
+  async function posSection() {
+    const info = await api(`/webhooks/pos-info?${qLoc()}`);
+    const badge = { processed: 'good', stored: 'warn', error: 'bad' };
+    return `
+      <div class="card">
+        <div class="card-title">POS webhook (this location)</div>
+        <p class="hint">Point your POS (or Zapier/Make) at this URL with a JSON POST and sales log themselves.
+          Recognized fields: <code>date</code>, <code>total</code>, and optional <code>channels: [{name, amount}]</code>
+          — channel names matched to your sales channels. Anything else still arrives and is stored below so we can add a custom parser for your POS.</p>
+        <div class="webhook-url"><code id="whUrl">${esc(info.url)}</code></div>
+        <div class="quick-actions">
+          <button class="btn" id="whCopy">📋 Copy URL</button>
+          <button class="btn" id="whRegen">↻ Regenerate (invalidates old URL)</button>
+        </div>
+        ${info.events.length ? `
+        <details style="margin-top:10px"><summary class="hint">Recent deliveries (${info.events.length})</summary>
+          ${info.events.map(e => `
+            <div class="list-row"><div>
+              <span class="pill ${badge[e.status] || ''}">${esc(e.status)}</span>
+              <span class="hint">${esc(e.received_at)}</span>
+              <div class="hint">${esc(e.note || '')}</div>
+              <div class="hint" style="word-break:break-all">${esc(e.payload)}</div>
+            </div></div>`).join('')}
+        </details>` : '<div class="hint">No deliveries yet — send a test POST to see it appear here.</div>'}
       </div>`;
   }
 
@@ -235,6 +263,20 @@
           render();
         } catch (err) { toast(err.message, true); }
       };
+
+      // POS webhook
+      const whCopy = app.querySelector('#whCopy');
+      if (whCopy) {
+        whCopy.onclick = async () => {
+          await navigator.clipboard.writeText(app.querySelector('#whUrl').textContent);
+          toast('URL copied');
+        };
+        app.querySelector('#whRegen').onclick = async () => {
+          if (!confirm('Regenerate? Your POS must be updated with the new URL.')) return;
+          await api(`/webhooks/pos-regenerate?${qLoc()}`, { method: 'POST', body: { location_id: state.locationId } });
+          toast('New URL generated'); render();
+        };
+      }
 
       const custBox = app.querySelector('#custList');
       custBox.closest('details').addEventListener('toggle', async function loadOnce(ev) {

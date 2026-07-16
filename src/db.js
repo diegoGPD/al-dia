@@ -272,6 +272,19 @@ if (!hasColumn('loyalty_config', 'pass_type_id')) {
            ALTER TABLE loyalty_config ADD COLUMN apple_team_id TEXT;
            ALTER TABLE loyalty_config ADD COLUMN google_issuer_id TEXT;`);
 }
+// Per-location secret for the inbound POS webhook.
+if (!hasColumn('locations', 'webhook_token')) {
+  db.exec(`ALTER TABLE locations ADD COLUMN webhook_token TEXT;
+           CREATE TABLE IF NOT EXISTS pos_events (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+             received_at TEXT NOT NULL DEFAULT (datetime('now')),
+             payload TEXT NOT NULL,
+             status TEXT NOT NULL DEFAULT 'stored',
+             note TEXT
+           );
+           CREATE INDEX IF NOT EXISTS idx_pos_events_loc ON pos_events(location_id, id);`);
+}
 
 // ---- Default categories for a new location (all fully editable/deletable) ----
 // Commission % values are editable starting points — adjust them in Settings
