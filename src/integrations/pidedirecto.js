@@ -26,7 +26,7 @@ const BASE_CANDIDATES = () => [
   'https://api.pidedirecto.mx',
   'https://api.pidedirecto.com'
 ].filter(Boolean);
-const PATH_PREFIXES = ['/api', ''];
+const PATH_PREFIXES = ['/pidedirectoexternal', '/api', ''];
 let workingApi = null; // { base, prefix } once discovered
 
 async function pdApi(method, body) {
