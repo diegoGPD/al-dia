@@ -122,6 +122,25 @@ function staffRoutes(r) {
     catch (e) { res.status(502).json({ error: e.message }); }
   });
 
+  // Historical backfill from a given date (default July 1) with a
+  // per-channel classification report.
+  r.post('/webhooks/pd-backfill', requireOwner, checkLocation, async (req, res) => {
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(req.body.from || '') ? req.body.from : '2026-07-01';
+    try {
+      res.json(await pd.backfillRange(req.locationId,
+        `${from}T00:00:00.000Z`, new Date(Date.now() + 864e5).toISOString()));
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
+
+  // Channel commission rates (PideDirecto view onto the editable categories)
+  r.get('/webhooks/pd-rates', requireOwner, checkLocation, (req, res) => {
+    res.json(pd.ratesView(req.locationId));
+  });
+
+  r.post('/webhooks/pd-rates/apply', requireOwner, checkLocation, (req, res) => {
+    res.json(pd.applyRealRates(req.locationId));
+  });
+
   r.post('/webhooks/pos-regenerate', requireOwner, checkLocation, (req, res) => {
     const t = crypto.randomBytes(24).toString('hex');
     db.prepare('UPDATE locations SET webhook_token = ? WHERE id = ?').run(t, req.locationId);

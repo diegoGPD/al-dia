@@ -39,12 +39,17 @@ function extractOrder(payload) {
   if (eventType === 'ORDER_COMPLETED' || orderStatus === 'COMPLETE' || orderStatus === 'COMPLETED' || o.completedAt) status = 'COMPLETE';
   if (eventType === 'ORDER_CANCELLED' || eventType === 'ORDER_REJECTED' ||
       orderStatus === 'CANCELLED' || orderStatus === 'REJECTED' || o.cancelledAt) status = 'CANCELLED';
+  // Payment method, incl. custom methods (this is how a "BanRegio" terminal
+  // shows up); verified against live payloads via the Settings event log.
+  const custom = o.customPaymentMethod ||
+    (Array.isArray(o.payments) && o.payments[0] && o.payments[0].customPaymentMethod) || null;
+  const method = String(o.paymentMethod || '').toUpperCase() || null;
   return {
     orderId: String(orderId),
     eventType: eventType || null,
     status,
     channel: String(o.app || o.channel || '').toUpperCase() || null,
-    paymentMethod: String(o.paymentMethod || '').toUpperCase() || null,
+    paymentMethod: [method, custom ? String(custom).toUpperCase() : null].filter(Boolean).join('/') || null,
     amount: num(o.total ?? o.subtotal),
     date: localDate(o.completedAt || o.deliveredAt || o.createdAt || o.acceptedAt),
     storeId: o.storeId || null
@@ -68,9 +73,12 @@ function buildMapping(locationId) {
     'SELECT id, name FROM revenue_categories WHERE location_id = ? AND active = 1').all(locationId);
   const accounts = db.prepare(
     'SELECT id, name FROM accounts WHERE location_id = ? AND active = 1').all(locationId);
-  const CARD_METHODS = ['CARD', 'CARD_ON_DELIVERY', 'PAYMENT_TERMINAL', 'PAYMENT_LINK', 'MULTIPLE'];
 
+  // Strict classification: unknown POS payment methods are NOT guessed —
+  // they land in the unclassified bucket and get flagged for the owner,
+  // because POS commission depends on how the customer paid (0/5/17%).
   const categoryFor = (channel, payment) => {
+    const pay = payment || '';
     switch (channel) {
       case 'UBER_EATS': return findCategory(cats, ['uber eats']);
       case 'DIDI_FOOD': return findCategory(cats, ['didi']);
@@ -78,12 +86,12 @@ function buildMapping(locationId) {
       case 'PEDIDOS_YA': return findCategory(cats, ['pedidos ya', 'pedidosya']);
       case 'PIDEDIRECTOPOS':
       case 'PIDEDIRECTOKIOSK':
-        if (payment === 'CASH') return findCategory(cats, ['efectivo en tienda']);
-        if (payment === 'TRANSFER') return findCategory(cats, ['banorte']) || findCategory(cats, ['tarjeta en tienda']);
-        if (CARD_METHODS.includes(payment)) return findCategory(cats, ['tarjeta en tienda']);
-        return findCategory(cats, ['tarjeta en tienda']) || findCategory(cats, ['efectivo en tienda']);
+        if (pay.includes('BANREGIO')) return findCategory(cats, ['banregio', 'banorte']);
+        if (pay.startsWith('CASH')) return findCategory(cats, ['efectivo en tienda']);
+        if (pay.startsWith('CARD')) return findCategory(cats, ['tarjeta en tienda']);
+        return null; // PAYMENT_TERMINAL / TRANSFER / MULTIPLE / etc. → flag, don't guess
       case 'PIDEDIRECTO': // their ecommerce (menú web)
-        if (payment === 'CASH') return findCategory(cats, ['efectivo menú web', 'efectivo menu web']);
+        if (pay.startsWith('CASH')) return findCategory(cats, ['efectivo menú web', 'efectivo menu web']);
         return findCategory(cats, ['tarjeta menú web', 'tarjeta menu web']);
       default: return null;
     }
@@ -167,33 +175,92 @@ function processWebhook(locationId, payload) {
   };
 }
 
+// ---------- real commission rates per channel (owner-editable) ----------
+// Rates live on the matching revenue category (commission_percent), which the
+// owner can edit any time in Settings. This table defines the channel →
+// category match and the real rates for one-tap application.
+const PD_RATE_TARGETS = [
+  { key: 'UBER_EATS', label: 'Uber Eats', needles: ['uber eats'], percent: 55 },
+  { key: 'RAPPI', label: 'Rappi', needles: ['rappi'], percent: 45 },
+  { key: 'DIDI_FOOD', label: 'Didi Food', needles: ['didi'], percent: 50 },
+  { key: 'PIDEDIRECTO_CARD', label: 'PideDirecto web (tarjeta)', needles: ['tarjeta menú web', 'tarjeta menu web'], percent: 8 },
+  { key: 'PIDEDIRECTO_CASH', label: 'PideDirecto web (efectivo)', needles: ['efectivo menú web', 'efectivo menu web'], percent: 8 },
+  { key: 'POS_CASH', label: 'POS — efectivo', needles: ['efectivo en tienda'], percent: 0 },
+  { key: 'POS_CARD', label: 'POS — tarjeta', needles: ['tarjeta en tienda'], percent: 5 },
+  { key: 'POS_BANREGIO', label: 'POS — BanRegio', needles: ['banregio', 'banorte'], percent: 17 }
+];
+
+function ratesView(locationId) {
+  const cats = db.prepare(
+    'SELECT id, name, commission_percent FROM revenue_categories WHERE location_id = ? AND active = 1').all(locationId);
+  return PD_RATE_TARGETS.map(t => {
+    const cat = cats.find(c => t.needles.some(n => c.name.toLowerCase().includes(n)));
+    return { ...t, category: cat ? { id: cat.id, name: cat.name, current: cat.commission_percent } : null };
+  });
+}
+
+function applyRealRates(locationId) {
+  const view = ratesView(locationId);
+  const applied = [], unmatched = [];
+  for (const t of view) {
+    if (!t.category) { unmatched.push(t.label); continue; }
+    db.prepare('UPDATE revenue_categories SET commission_percent = ? WHERE id = ?')
+      .run(t.percent, t.category.id);
+    applied.push(`${t.category.name} → ${t.percent}%`);
+  }
+  return { applied, unmatched };
+}
+
 // ---------- reconciliation via their API (safety net for missed webhooks) ----------
-async function reconcileLocation(locationId, daysBack = 3) {
+async function backfillRange(locationId, startIso, endIso) {
   const loc = db.prepare('SELECT pd_store_id FROM locations WHERE id = ?').get(locationId);
   if (!loc?.pd_store_id || !apiKeyPresent()) {
     return { skipped: true, reason: !loc?.pd_store_id ? 'no store id configured' : 'no API key configured' };
   }
-  const end = new Date(Date.now() + 864e5).toISOString();
-  const start = new Date(Date.now() - daysBack * 864e5).toISOString();
   const res = await fetch(`${API_BASE()}/api/getOrders`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.PIDEDIRECTO_API_KEY },
-    body: JSON.stringify({ storeId: loc.pd_store_id, startDate: start, endDate: end })
+    body: JSON.stringify({ storeId: loc.pd_store_id, startDate: startIso, endDate: endIso })
   });
   if (!res.ok) throw new Error(`getOrders HTTP ${res.status}`);
   const body = await res.json();
   const orders = Array.isArray(body) ? body : (body.orders || []);
+
+  const { categoryFor } = buildMapping(locationId);
+  const catNames = Object.fromEntries(db.prepare(
+    'SELECT id, name FROM revenue_categories WHERE location_id = ?').all(locationId).map(c => [c.id, c.name]));
   const dates = new Set();
+  const byChannel = {}; // classification report
   let seen = 0;
   for (const raw of orders) {
     const o = extractOrder(raw);
     if (!o) continue;
     upsertOrder(locationId, o, 'backfill');
+    if (o.status === 'COMPLETE') {
+      const catId = categoryFor(o.channel, o.paymentMethod);
+      const key = catId
+        ? `${o.channel}${o.paymentMethod ? ' · ' + o.paymentMethod : ''} → ${catNames[catId]}`
+        : `⚠ UNCLASSIFIED: ${o.channel || '?'} · ${o.paymentMethod || 'no payment method'}`;
+      const b = byChannel[key] = byChannel[key] || { count: 0, amount: 0, classified: !!catId };
+      b.count++; b.amount += o.amount;
+    }
     dates.add(o.date);
     seen++;
   }
   for (const d of dates) rebuildDay(locationId, d);
-  return { skipped: false, orders: seen, daysRebuilt: dates.size };
+  return {
+    skipped: false, orders: seen, daysRebuilt: dates.size,
+    report: Object.entries(byChannel)
+      .sort((a, b) => b[1].amount - a[1].amount)
+      .map(([k, v]) => ({ group: k, count: v.count, amount: Math.round(v.amount * 100) / 100, classified: v.classified })),
+    unclassified: Object.values(byChannel).filter(v => !v.classified).reduce((s, v) => s + v.count, 0)
+  };
+}
+
+async function reconcileLocation(locationId, daysBack = 3) {
+  return backfillRange(locationId,
+    new Date(Date.now() - daysBack * 864e5).toISOString(),
+    new Date(Date.now() + 864e5).toISOString());
 }
 
 async function reconcileAll() {
@@ -227,4 +294,7 @@ function statusFor(locationId) {
   };
 }
 
-module.exports = { looksLikePideDirecto, processWebhook, reconcileLocation, startReconciler, statusFor };
+module.exports = {
+  looksLikePideDirecto, processWebhook, reconcileLocation, backfillRange,
+  startReconciler, statusFor, ratesView, applyRealRates
+};

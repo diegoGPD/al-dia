@@ -88,9 +88,10 @@
   }
 
   async function posSection() {
-    const [info, pdInfo] = await Promise.all([
+    const [info, pdInfo, pdRates] = await Promise.all([
       api(`/webhooks/pos-info?${qLoc()}`),
-      api(`/webhooks/pd-status?${qLoc()}`)
+      api(`/webhooks/pd-status?${qLoc()}`),
+      api(`/webhooks/pd-rates?${qLoc()}`)
     ]);
     const badge = { processed: 'good', stored: 'warn', error: 'bad', tracked: '' };
     const pdBlock = `
@@ -105,8 +106,21 @@
             <input name="pd_store_id" value="${esc(pdInfo.storeId || '')}" placeholder="77185c4a-1ccd-48e9-…"></label>
           <button class="btn primary" type="submit" style="align-self:end">Save</button>
         </form>
-        <button class="btn tiny" id="pdReconcile">↻ Reconcile last 3 days now</button>
-        <div class="hint">Orders arriving on the webhook above log themselves (completed orders only; cancellations reverse automatically, retries never double-count). The reconciler also runs every 6 hours as a safety net for missed webhooks.</div>
+        <div class="quick-actions" style="margin-top:8px">
+          <button class="btn tiny" id="pdReconcile">↻ Reconcile last 3 days</button>
+          <button class="btn tiny" id="pdBackfill">⏪ Backfill July 1 → today</button>
+        </div>
+        <div id="pdReport"></div>
+        <details style="margin-top:10px"><summary class="hint">Commission rates by channel</summary>
+          ${pdRates.map(t => `
+            <div class="bd-row"><div class="bd-name">${esc(t.label)}
+              <span class="hint">${t.category ? '→ ' + esc(t.category.name) : '⚠ no matching sales channel'}</span></div>
+              <div class="bd-amt">${t.category ? (t.category.current ?? 0) + '%' : '—'}</div>
+              <div class="bd-inv hint">real: ${t.percent}%</div></div>`).join('')}
+          <button class="btn primary" id="pdApplyRates" style="margin-top:8px">Set all channels to the real rates</button>
+          <div class="hint">Writes the real rates onto your sales channels (editable any time under "Your categories"). After changing rates, use "Recalculate past commissions" above so history matches.</div>
+        </details>
+        <div class="hint">Orders arriving on the webhook above log themselves (completed orders only; cancellations reverse automatically, retries never double-count). POS orders with a payment method I can't classify (not cash/card/BanRegio) are counted in totals but flagged — never guessed. The reconciler also runs every 6 hours.</div>
       </div>`;
     return `
       <div class="card">
@@ -301,12 +315,32 @@
             location_id: state.locationId, pd_store_id: new FormData(e.target).get('pd_store_id') } });
           toast('PideDirecto store saved'); render();
         };
+        const showPdReport = (r) => {
+          if (r.skipped) { toast(`Skipped: ${r.reason}`, true); return; }
+          const box = app.querySelector('#pdReport');
+          box.innerHTML = `<div class="card" style="margin-top:8px">
+            <div class="card-title">${r.orders} orders · ${r.daysRebuilt} days rebuilt${r.unclassified ? ` · <span class="pill bad">${r.unclassified} unclassified</span>` : ''}</div>
+            ${(r.report || []).map(g => `
+              <div class="bd-row"><div class="bd-name ${g.classified ? '' : 'neg'}">${esc(g.group)}</div>
+                <div class="bd-amt">${money(g.amount)}</div>
+                <div class="bd-inv hint">${g.count} orders</div></div>`).join('')}
+            ${r.unclassified ? '<div class="hint">⚠ Unclassified orders count in daily totals but carry no channel/commission. Tell me what those payment methods are and I\'ll map them.</div>' : ''}
+          </div>`;
+        };
         app.querySelector('#pdReconcile').onclick = async () => {
-          try {
-            const r = await api(`/webhooks/pd-reconcile?${qLoc()}`, { method: 'POST', body: { location_id: state.locationId } });
-            toast(r.skipped ? `Skipped: ${r.reason}` : `Reconciled ${r.orders} orders, ${r.daysRebuilt} days rebuilt`);
-            render();
-          } catch (err) { toast(err.message, true); }
+          try { showPdReport(await api(`/webhooks/pd-reconcile?${qLoc()}`, { method: 'POST', body: { location_id: state.locationId } })); }
+          catch (err) { toast(err.message, true); }
+        };
+        app.querySelector('#pdBackfill').onclick = async () => {
+          if (!confirm('Pull every PideDirecto order from July 1 to today and rebuild those days? Existing manual entries on those days will be replaced by order data.')) return;
+          try { showPdReport(await api(`/webhooks/pd-backfill?${qLoc()}`, { method: 'POST', body: { location_id: state.locationId, from: '2026-07-01' } })); }
+          catch (err) { toast(err.message, true); }
+        };
+        app.querySelector('#pdApplyRates').onclick = async () => {
+          if (!confirm('Set Uber 55%, Rappi 45%, Didi 50%, web 8%, POS card 5%, POS cash 0%, BanRegio 17% on your sales channels?')) return;
+          const r = await api(`/webhooks/pd-rates/apply?${qLoc()}`, { method: 'POST', body: { location_id: state.locationId } });
+          toast(`Applied: ${r.applied.length} channels${r.unmatched.length ? ` · no match for: ${r.unmatched.join(', ')}` : ''}`);
+          render();
         };
       }
 

@@ -44,11 +44,13 @@
         <div class="be-row"><span>Your sales so far</span><strong>${money(c.revenue)}</strong></div>
         <div class="progress"><div class="progress-fill ${c.revenue >= be.salesNeeded ? 'good' : ''}"
           style="width:${Math.min(100, be.salesNeeded > 0 ? c.revenue / be.salesNeeded * 100 : 0)}%"></div></div>
-        <div class="hint">Covers your fixed costs of ${money(be.fixed)} plus the ${pct(be.ratio)} of every sale
-          that goes to day-to-day costs (${pct(be.varRatio)}) and channel commissions (${pct(be.commRatio)})${
+        <div class="hint">Both figures are <strong>gross sales</strong> (what your POS reports); the target is
+          grossed-up to already cover your fixed costs of ${money(be.fixed)} plus the ${pct(be.ratio)} of every
+          sale that leaves as day-to-day costs (${pct(be.varRatio)}) and channel commissions
+          (${pct(be.commRatio)} — your per-channel rates weighted by the actual channel mix)${
           be.ratioSource === 'actual' ? '' : be.ratioSource === 'mixed'
-            ? ' — partly from your recent history until this period has all its costs logged'
-            : ' — estimated from your recent history and category defaults for now'}.</div>
+            ? '. Partly from recent history until this period has all its costs logged'
+            : '. Estimated from recent history and channel settings for now'}.</div>
       </div>` : '';
 
     const bmCard = d.benchmarks.length ? `
