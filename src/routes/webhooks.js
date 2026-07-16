@@ -52,7 +52,7 @@ function interpret(p, locationId) {
 }
 
 function publicRoutes(r) {
-  r.post('/webhooks/pos/:token', (req, res) => {
+  r.post('/webhooks/pos/:token', async (req, res) => {
     const loc = db.prepare('SELECT id FROM locations WHERE webhook_token = ? AND active = 1')
       .get(req.params.token);
     if (!loc) return res.status(404).json({ error: 'Unknown webhook' });
@@ -68,7 +68,7 @@ function publicRoutes(r) {
     try {
       // PideDirecto order events take priority on this same URL.
       if (pd.looksLikePideDirecto(req.body)) {
-        const r = pd.processWebhook(loc.id, req.body);
+        const r = await pd.processWebhook(loc.id, req.body);
         db.prepare('UPDATE pos_events SET status = ?, note = ? WHERE id = ?')
           .run(r.status, r.note, Number(evt.lastInsertRowid));
         return res.json({ ok: true, ...r });

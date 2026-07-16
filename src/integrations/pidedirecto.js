@@ -16,8 +16,42 @@ const { db } = require('../db');
 const { num } = require('../lib/parse');
 const { upsertDayRevenue } = require('../lib/revenue');
 
-const API_BASE = () => process.env.PIDEDIRECTO_API_BASE || 'https://api.pidedirecto.mx';
 const apiKeyPresent = () => !!process.env.PIDEDIRECTO_API_KEY;
+
+// Their docs don't publish the API base URL (it comes from the account
+// manager), so we probe likely combinations once and remember what works.
+// PIDEDIRECTO_API_BASE overrides everything if set.
+const BASE_CANDIDATES = () => [
+  process.env.PIDEDIRECTO_API_BASE,
+  'https://api.pidedirecto.mx',
+  'https://api.pidedirecto.com'
+].filter(Boolean);
+const PATH_PREFIXES = ['/api', ''];
+let workingApi = null; // { base, prefix } once discovered
+
+async function pdApi(method, body) {
+  if (!apiKeyPresent()) throw new Error('PIDEDIRECTO_API_KEY not configured');
+  const headers = { 'Content-Type': 'application/json', 'x-api-key': process.env.PIDEDIRECTO_API_KEY };
+  const combos = workingApi ? [workingApi]
+    : BASE_CANDIDATES().flatMap(base => PATH_PREFIXES.map(prefix => ({ base, prefix })));
+  const tried = [];
+  for (const c of combos) {
+    const url = `${c.base}${c.prefix}/${method}`;
+    try {
+      const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+      if (res.status === 404) { tried.push(`${url} → 404`); continue; }
+      if (!res.ok) throw new Error(`${method} HTTP ${res.status} at ${url}`);
+      workingApi = c;
+      return await res.json();
+    } catch (e) {
+      if (String(e.message).includes('HTTP')) throw e;
+      tried.push(`${url} → ${e.message}`);
+    }
+  }
+  workingApi = null;
+  throw new Error(`Could not reach PideDirecto API (${method}). Tried: ${tried.join('; ')}. ` +
+    'Ask your account manager for the production API base URL and set PIDEDIRECTO_API_BASE.');
+}
 
 // Mexico City is UTC-6 year-round (no DST since 2022).
 const TZ_OFFSET_H = Number(process.env.TZ_OFFSET_HOURS ?? -6);
@@ -128,6 +162,18 @@ function rebuildDay(locationId, date) {
   const orders = db.prepare(
     `SELECT * FROM pd_orders WHERE location_id = ? AND date = ? AND status = 'COMPLETE'`)
     .all(locationId, date);
+
+  // Safety guards so bad/missing order data never wipes a day's real numbers:
+  // 1. Orders whose amounts are all zero mean we couldn't fetch details yet.
+  // 2. A day never touched by PideDirecto data isn't overwritten by an empty rebuild.
+  const existing = db.prepare(
+    'SELECT note FROM revenue_entries WHERE location_id = ? AND date = ?').get(locationId, date);
+  const enriched = orders.filter(o => o.amount > 0);
+  if (orders.length && !enriched.length)
+    return { skipped: true, reason: 'orders have no amounts yet (details pending)', orders: orders.length };
+  if (!orders.length && (!existing || existing.note !== 'PideDirecto (auto)'))
+    return { skipped: true, reason: 'no PD orders and day not PD-managed', orders: 0 };
+
   const { categoryFor, accountFor } = buildMapping(locationId);
 
   const items = {}, accounts = {};
@@ -158,20 +204,43 @@ function rebuildDay(locationId, date) {
 }
 
 // ---------- webhook entry point ----------
-function processWebhook(locationId, payload) {
-  const o = extractOrder(payload);
+// Live payloads are thin notifications ({orderId, storeId, eventType,
+// occurredAt}) — the money fields come from a getOrder call.
+async function processWebhook(locationId, payload) {
+  let o = extractOrder(payload);
   if (!o) return { status: 'stored', note: 'PideDirecto-like payload without orderId — stored for inspection' };
+
+  let enrichNote = '';
+  if ((o.amount <= 0 || !o.channel) && apiKeyPresent()) {
+    try {
+      const raw = await pdApi('getOrder', { orderId: o.orderId });
+      const full = extractOrder(raw && typeof raw === 'object' ? raw : {});
+      if (full) {
+        o = { ...full,
+          status: o.status !== 'OTHER' ? o.status : full.status,
+          eventType: o.eventType || full.eventType };
+      }
+    } catch (e) {
+      enrichNote = ` ⚠ couldn't fetch order details (${e.message.slice(0, 160)}) — amount pending, the reconciler will fill it in.`;
+    }
+  } else if (o.amount <= 0 && !apiKeyPresent()) {
+    enrichNote = ' ⚠ webhook carries no amount and PIDEDIRECTO_API_KEY is not set — cannot fetch order details.';
+  }
+
   upsertOrder(locationId, o, 'webhook');
   if (o.status === 'OTHER') {
-    return { status: 'tracked', note: `Order ${o.orderId.slice(0, 8)}… ${o.eventType || 'update'} tracked (revenue only counts completed orders)` };
+    return { status: 'tracked', note: `Order ${o.orderId.slice(0, 8)}… ${o.eventType || 'update'} tracked (revenue only counts completed orders)${enrichNote}` };
   }
   const r = rebuildDay(locationId, o.date);
+  if (r.skipped) {
+    return { status: 'tracked', note: `Order ${o.orderId.slice(0, 8)}… recorded but day not rebuilt: ${r.reason}.${enrichNote}` };
+  }
   const unmappedNote = Object.keys(r.unmapped).length
     ? ` ⚠ unmapped channels: ${Object.entries(r.unmapped).map(([c, v]) => `${c} (${v.toFixed(2)})`).join(', ')} — counted in the total, add matching sales channels in Settings for the breakdown.`
     : '';
   return {
     status: 'processed',
-    note: `${o.status === 'CANCELLED' ? 'Cancellation' : 'Completed order'} ${o.orderId.slice(0, 8)}… → ${o.date} rebuilt from ${r.orders} orders, total ${r.total.toFixed(2)}.${unmappedNote}`
+    note: `${o.status === 'CANCELLED' ? 'Cancellation' : 'Completed order'} ${o.orderId.slice(0, 8)}… (${o.channel || '?'}${o.paymentMethod ? ' · ' + o.paymentMethod : ''}, ${o.amount.toFixed(2)}) → ${o.date} rebuilt from ${r.orders} orders, total ${r.total.toFixed(2)}.${unmappedNote}${enrichNote}`
   };
 }
 
@@ -217,13 +286,7 @@ async function backfillRange(locationId, startIso, endIso) {
   if (!loc?.pd_store_id || !apiKeyPresent()) {
     return { skipped: true, reason: !loc?.pd_store_id ? 'no store id configured' : 'no API key configured' };
   }
-  const res = await fetch(`${API_BASE()}/api/getOrders`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.PIDEDIRECTO_API_KEY },
-    body: JSON.stringify({ storeId: loc.pd_store_id, startDate: startIso, endDate: endIso })
-  });
-  if (!res.ok) throw new Error(`getOrders HTTP ${res.status}`);
-  const body = await res.json();
+  const body = await pdApi('getOrders', { storeId: loc.pd_store_id, startDate: startIso, endDate: endIso });
   const orders = Array.isArray(body) ? body : (body.orders || []);
 
   const { categoryFor } = buildMapping(locationId);
