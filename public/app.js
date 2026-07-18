@@ -88,6 +88,8 @@ const App = (() => {
     const locs = state.me.locations;
     const active = currentRoute();
     return `
+    ${state.me.demo ? `<div class="demo-ribbon">🎬 Demo — sample data, nothing here is real
+      <button id="demoReset" class="btn tiny">↺ Reset demo</button></div>` : ''}
     <header class="topbar">
       <div class="brand">Al Día</div>
       ${locs.length > 1 ? `
@@ -145,6 +147,14 @@ const App = (() => {
       state.locationId = Number(sw.value);
       localStorage.setItem('aldia_loc', sw.value);
       render();
+    };
+    const dr = app.querySelector('#demoReset');
+    if (dr) dr.onclick = async () => {
+      if (!confirm('Reset the demo to its original sample data?')) return;
+      dr.textContent = 'Resetting…';
+      await api('/demo/reset', { method: 'POST' });
+      toast('Demo reset — fresh sample data');
+      await loadMe(); render();
     };
   }
 

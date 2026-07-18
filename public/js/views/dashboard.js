@@ -134,6 +134,7 @@
         <a class="btn primary" href="#/log-revenue">+ Log sales</a>
         <a class="btn" href="#/log-costs">+ Log costs</a>
       </div>
+      ${state.me.demo ? `<button class="btn full" id="simOrder" style="margin-bottom:14px">🎬 Simulate an incoming PideDirecto order</button>` : ''}
       <a class="log-tile" href="#/insights"><span class="log-icon">🔮</span>
         <div><strong>Forecast & insights</strong>
         <div class="hint">Where you're headed, what's changing, and why</div></div></a>`;
@@ -144,6 +145,15 @@
     const detail = app.querySelector('#moneyOutDetail');
     if (card && detail) card.onclick = () => {
       detail.style.display = detail.style.display === 'none' ? '' : 'none';
+    };
+    const sim = app.querySelector('#simOrder');
+    if (sim) sim.onclick = async () => {
+      sim.disabled = true;
+      try {
+        const r = await api('/demo/simulate-order', { method: 'POST', body: { location_id: state.locationId } });
+        toast(`🛵 ${r.channel}${r.payment ? ' · ' + r.payment : ''} — ${money(r.amount)} logged, commission applied`);
+        setTimeout(render, 900);
+      } catch (err) { toast(err.message, true); sim.disabled = false; }
     };
   });
 

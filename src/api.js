@@ -14,6 +14,7 @@ r.use(requireAuth);               // everything below needs a session
 require('./routes/loyalty').staffRoutes(r);  // scan visits, redeem, program config
 require('./routes/webhooks').staffRoutes(r); // webhook URL + event log (owner)
 require('./routes/quick').staffRoutes(r);    // quick-link management + receipts
+require('./routes/demo')(r);                 // demo-only: reset + order simulator (inert unless DEMO_MODE=1)
 
 require('./routes/admin')(r);     // me, locations, users, maintenance
 require('./routes/categories')(r);// the four configurable groups

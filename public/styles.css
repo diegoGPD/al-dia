@@ -17,6 +17,12 @@ body {
 #app { display: flex; flex-direction: column; min-height: 100dvh; }
 
 /* ---------- shell ---------- */
+.demo-ribbon {
+  background: #2d3436; color: #ffeaa7; font-size: 13px; font-weight: 700;
+  padding: 8px 14px; display: flex; align-items: center; justify-content: center; gap: 12px;
+}
+.demo-ribbon .btn { padding: 4px 10px; font-size: 12px; }
+
 .topbar {
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; justify-content: space-between; gap: 12px;

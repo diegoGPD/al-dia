@@ -58,6 +58,9 @@ npm start        # http://localhost:3000
 ### Benchmarks
 The dashboard compares your food, labor, prime, occupancy and net-margin percentages against **general industry ranges** (clearly labeled — they're not your targets) and flags anything well outside them. Tag categories in Settings ("counts as food / labor / occupancy") to keep these accurate.
 
+## Demo mode (shareable, fake data)
+Deploy the same repo a second time with `DEMO_MODE=1` and you get a fully interactive demo: no login (every visitor is the demo owner), a fake two-location restaurant ("La Milpa") with 8 weeks of seeded history — simulated PideDirecto orders across every channel and payment method, costs, schedules, loyalty customers, goals — a visible "Demo — sample data" ribbon with a **Reset demo** button, and a **"Simulate an incoming PideDirecto order"** button on the dashboard that runs a fake order through the real webhook pipeline live. Total isolation: it's a separate service with its own database; demo endpoints return 404 and the login wall stays up on the real deployment (`DEMO_MODE` unset). To share: Railway → New → Deploy from the same GitHub repo → add variable `DEMO_MODE=1` → Generate domain → send that URL. No volume needed (a restart just reseeds). Regenerate the domain to invalidate a shared link.
+
 ## Customer loyalty cards
 A shared stamp program across all locations. Print the signup QR (Settings → Loyalty → printable QR) for a table tent; customers scan it, sign up with just a name and phone/email, and get a live digital card at `/card/<code>` with their own QR, stamp progress, and reward status — updated automatically after every visit. Staff stamp visits from **Log → Scan loyalty card** (phone camera; one stamp per customer per day) and redeem rewards from the same screen. Configure the program (name, stamps needed, reward) in Settings.
 

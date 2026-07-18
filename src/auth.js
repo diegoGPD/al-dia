@@ -57,11 +57,19 @@ function clearSession(res) {
 }
 
 // Middleware: attach req.user (with allowed location ids) or 401.
+// In DEMO_MODE (a separate deployment with its own throwaway database),
+// every visitor is automatically the demo owner — no login screen.
 function requireAuth(req, res, next) {
-  const payload = verify(parseCookies(req)[COOKIE]);
-  if (!payload) return res.status(401).json({ error: 'Not signed in' });
-  const user = db.prepare('SELECT id, email, name, role FROM users WHERE id = ?').get(payload.uid);
-  if (!user) return res.status(401).json({ error: 'Not signed in' });
+  let user;
+  if (process.env.DEMO_MODE === '1') {
+    user = db.prepare(`SELECT id, email, name, role FROM users WHERE role = 'owner' LIMIT 1`).get();
+    if (!user) return res.status(503).json({ error: 'Demo is still seeding — refresh in a moment' });
+  } else {
+    const payload = verify(parseCookies(req)[COOKIE]);
+    if (!payload) return res.status(401).json({ error: 'Not signed in' });
+    user = db.prepare('SELECT id, email, name, role FROM users WHERE id = ?').get(payload.uid);
+    if (!user) return res.status(401).json({ error: 'Not signed in' });
+  }
   if (user.role === 'owner') {
     user.locationIds = db.prepare('SELECT id FROM locations WHERE active = 1').all().map(r => r.id);
   } else {

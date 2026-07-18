@@ -25,5 +25,14 @@ app.use((err, req, res, next) => {
 // PideDirecto reconciliation safety net (no-op until API key + store id exist)
 require('./src/integrations/pidedirecto').startReconciler();
 
+// Demo deployments seed themselves with fake data on first boot.
+if (process.env.DEMO_MODE === '1') {
+  const { db } = require('./src/db');
+  if (db.prepare('SELECT COUNT(*) c FROM users').get().c === 0) {
+    console.log('DEMO_MODE: seeding sample data…');
+    require('./src/demo/seed').seed();
+  }
+}
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Al Día running on port ${PORT}`));

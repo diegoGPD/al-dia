@@ -359,5 +359,5 @@ function statusFor(locationId) {
 
 module.exports = {
   looksLikePideDirecto, processWebhook, reconcileLocation, backfillRange,
-  startReconciler, statusFor, ratesView, applyRealRates
+  startReconciler, statusFor, ratesView, applyRealRates, rebuildDay
 };

@@ -8,7 +8,11 @@ module.exports = (r) => {
     const locations = db.prepare(
       `SELECT id, name FROM locations WHERE active = 1 AND id IN (${req.user.locationIds.map(() => '?').join(',') || 'NULL'}) ORDER BY name`)
       .all(...req.user.locationIds);
-    res.json({ user: { id: req.user.id, email: req.user.email, name: req.user.name, role: req.user.role }, locations });
+    res.json({
+      user: { id: req.user.id, email: req.user.email, name: req.user.name, role: req.user.role },
+      locations,
+      demo: process.env.DEMO_MODE === '1'
+    });
   });
 
   // ---- locations ----
