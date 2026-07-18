@@ -86,8 +86,27 @@
       <div class="stat-grid">
         <div class="stat-card"><div class="stat-label">Money in</div>
           <div class="stat-value">${money(c.revenue)}</div>${delta(c.revenue, p.revenue)}</div>
-        <div class="stat-card"><div class="stat-label">Money out</div>
+        <div class="stat-card tappable" id="moneyOutCard"><div class="stat-label">Money out ▾</div>
           <div class="stat-value">${money(c.costs.total)}</div>${delta(c.costs.total, p.costs.total, true)}</div>
+        <div class="stat-card wide" id="moneyOutDetail" style="display:none">
+          <div class="stat-label">Where the money went</div>
+          ${(() => {
+            const parts = [
+              ['Recurring (rent, subscriptions…)', c.costs.recurring, 'rec'],
+              ['Team (scheduled labor)', c.costs.labor, 'labor'],
+              ['Day-to-day (food, supplies…)', c.costs.variable, 'var'],
+              ['Channel commissions', c.costs.commissions, 'comm'],
+              ['One-offs', c.costs.oneoff, 'one']
+            ].filter(x => x[1] > 0.005);
+            return parts.map(([label, amount, cls]) => `
+              <div class="type-row"><span>${label}</span><strong>${money(amount)}
+                <span class="hint">${c.costs.total > 0 ? Math.round(amount / c.costs.total * 100) : 0}%</span></strong></div>
+              <div class="progress slim"><div class="progress-fill ${cls}"
+                style="width:${c.costs.total > 0 ? amount / c.costs.total * 100 : 0}%"></div></div>`).join('')
+              || '<div class="hint">No costs in this period.</div>';
+          })()}
+          <a class="hint" href="#/breakdown">Full breakdown by category →</a>
+        </div>
         <div class="stat-card"><div class="stat-label">Commissions</div>
           <div class="stat-value">${money(c.costs.commissions)}</div>
           <div class="stat-sub">${c.revenue > 0 ? pct(c.costs.commissions / c.revenue) + ' of sales' : ''}</div>
@@ -119,6 +138,13 @@
         <div><strong>Forecast & insights</strong>
         <div class="hint">Where you're headed, what's changing, and why</div></div></a>`;
   });
-  registerRoute('dashboard_bind', bindPeriodBar);
+  registerRoute('dashboard_bind', (app) => {
+    bindPeriodBar(app);
+    const card = app.querySelector('#moneyOutCard');
+    const detail = app.querySelector('#moneyOutDetail');
+    if (card && detail) card.onclick = () => {
+      detail.style.display = detail.style.display === 'none' ? '' : 'none';
+    };
+  });
 
 })();

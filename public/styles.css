@@ -77,6 +77,10 @@ code { background: var(--bg); padding: 1px 5px; border-radius: 5px; font-size: 1
   background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px;
 }
 .stat-card.wide { grid-column: 1 / -1; }
+.stat-card.tappable { cursor: pointer; }
+.stat-card.tappable:active { background: var(--bg); }
+#moneyOutDetail { grid-column: 1 / -1; }
+#moneyOutDetail a { color: var(--green-dark); text-decoration: none; display: inline-block; margin-top: 6px; }
 .stat-card.profit { background: var(--green-light); }
 .stat-card.loss { background: var(--red-light); }
 .stat-label { font-size: 13px; color: var(--muted); font-weight: 600; }
