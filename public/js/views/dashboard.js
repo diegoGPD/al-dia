@@ -42,8 +42,21 @@
         <div class="card-title">Break-even point</div>
         <div class="be-row"><span>Sales needed to cover all costs</span><strong>${money(be.salesNeeded)}</strong></div>
         <div class="be-row"><span>Your sales so far</span><strong>${money(c.revenue)}</strong></div>
+        <div class="be-row hint-row"><span class="hint">Same thing net of commissions</span>
+          <span class="hint">${money(c.revenue - c.costs.commissions)} of ${money(be.salesNeeded * (1 - be.commRatio))} needed — same ${be.salesNeeded > 0 ? Math.round(c.revenue / be.salesNeeded * 100) : 0}% either way</span></div>
         <div class="progress"><div class="progress-fill ${c.revenue >= be.salesNeeded ? 'good' : ''}"
           style="width:${Math.min(100, be.salesNeeded > 0 ? c.revenue / be.salesNeeded * 100 : 0)}%"></div></div>
+        ${c.revenueByCategory.length ? `
+        <details><summary class="hint">What each $100 sold really contributes, by channel</summary>
+          ${c.revenueByCategory.filter(r => r.amount > 0).map(r => {
+            const commRate = r.amount > 0 ? r.commission / r.amount : 0;
+            const contrib = 100 * (1 - commRate - be.varRatio);
+            return `<div class="bd-row"><div class="bd-name">${esc(r.name)}</div>
+              <div class="bd-amt ${contrib <= 0 ? 'neg' : ''}">${money(contrib)}</div>
+              <div class="bd-inv hint">− ${pct(commRate)} comm.</div></div>`;
+          }).join('')}
+          <div class="hint">After that channel's commission and your day-to-day cost rate (${pct(be.varRatio)}). What's left pays rent, payroll and one-offs — a channel is only truly losing money if this goes negative.</div>
+        </details>` : ''}
         <div class="hint">Both figures are <strong>gross sales</strong> (what your POS reports); the target is
           grossed-up to already cover your fixed costs of ${money(be.fixed)} plus the ${pct(be.ratio)} of every
           sale that leaves as day-to-day costs (${pct(be.varRatio)}) and channel commissions
