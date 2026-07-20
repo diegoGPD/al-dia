@@ -48,12 +48,15 @@ function laborMaps(locationId, start, end) {
   // widen to whole weeks so the "does this week have a schedule" test is right
   const wideStart = mondayOf(start), wideEnd = addDays(mondayOf(end), 6);
   const hourly = Object.fromEntries(db.prepare(
-    `SELECT s.date, SUM(((CASE WHEN s.end_min <= s.start_min THEN s.end_min + 1440 ELSE s.end_min END) - s.start_min) / 60.0 * e.rate) v
-     FROM shifts s JOIN employees e ON e.id = s.employee_id AND e.pay_type = 'hourly'
-     WHERE s.location_id = ? AND s.date BETWEEN ? AND ? GROUP BY s.date`)
+    `SELECT t.date, SUM(((CASE WHEN t.end_min <= t.start_min THEN t.end_min + 1440 ELSE t.end_min END) - t.start_min) / 60.0 * e.rate) v
+     FROM turn_assignments ta
+     JOIN turns t ON t.id = ta.turn_id
+     JOIN employees e ON e.id = ta.employee_id AND e.pay_type = 'hourly'
+     WHERE t.location_id = ? AND t.date BETWEEN ? AND ? GROUP BY t.date`)
     .all(locationId, wideStart, wideEnd).map(r => [r.date, r.v]));
   const scheduledWeeks = new Set(db.prepare(
-    `SELECT DISTINCT date FROM shifts WHERE location_id = ? AND date BETWEEN ? AND ?`)
+    `SELECT DISTINCT t.date FROM turns t JOIN turn_assignments ta ON ta.turn_id = t.id
+     WHERE t.location_id = ? AND t.date BETWEEN ? AND ?`)
     .all(locationId, wideStart, wideEnd).map(r => mondayOf(r.date)));
   const salaryDaily = db.prepare(
     `SELECT COALESCE(SUM(rate),0) v FROM employees WHERE location_id = ? AND active = 1 AND pay_type = 'salary'`)

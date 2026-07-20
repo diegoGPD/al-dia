@@ -3,7 +3,7 @@
 (() => {
   const { api, state, registerRoute, nav, render, loadMe,
           money, money2, pct, esc, fmtDate, fmtRange, today, addDays, addMonths, toast } = App;
-  const { isOwner, qLoc, modal, periodBar, bindPeriodBar, fetchDashboard, moveDayDialog, trendChart } = App.ui;
+  const { isOwner, qLoc, modal, periodBar, bindPeriodBar, fetchDashboard, periodQuery, moveDayDialog, trendChart } = App.ui;
 
   // ======================================================================
   // Costs breakdown
@@ -84,7 +84,7 @@
   // Money accounts view
   // ======================================================================
   registerRoute('accounts', async () => {
-    const d = await api(`/accounts-view?${qLoc()}&granularity=${state.granularity}&date=${state.anchor}`);
+    const d = await api(`/accounts-view?${qLoc()}&${periodQuery()}`);
     const hasUnassigned = d.unassigned.moneyIn > 0.005 || d.unassigned.moneyOut > 0.005;
     return `
       ${moneySubnav('accounts')}

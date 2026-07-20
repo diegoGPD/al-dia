@@ -106,6 +106,8 @@ code { background: var(--bg); padding: 1px 5px; border-radius: 5px; font-size: 1
 }
 .seg-btn.on { background: var(--green); color: #fff; }
 .period-nav { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 10px; }
+.custom-range { display: flex; align-items: center; gap: 8px; margin-top: 10px; justify-content: center; }
+.custom-range input[type="date"] { width: auto; margin: 0; padding: 8px 10px; font-size: 14px; }
 .period-label { font-weight: 700; font-size: 15px; min-width: 150px; text-align: center; }
 .icon-btn {
   border: 1px solid var(--line); background: var(--card); border-radius: 10px;
@@ -276,6 +278,25 @@ strong.neg { color: var(--red); }
 .acc-move .neg { color: var(--red); font-weight: 700; }
 .cost-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .cost-inputs select { font-size: 14px; }
+
+/* ---------- turn-based schedule ---------- */
+.day-block {
+  background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 12px 16px; margin-bottom: 10px;
+}
+.day-block > summary { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.turn-card { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 10px 0; }
+.turn-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.turn-head .hint { display: block; }
+.turn-people { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+.person-chip {
+  display: inline-flex; align-items: center; gap: 4px; background: var(--green-light);
+  color: var(--green-dark); border-radius: 999px; padding: 5px 6px 5px 12px; font-size: 13px; font-weight: 600;
+}
+.chip-x { border: 0; background: transparent; color: var(--green-dark); font-size: 12px; cursor: pointer; padding: 2px 6px; }
+.add-person { width: auto; margin: 0; padding: 6px 8px; font-size: 13px; border-radius: 999px; }
+.day-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.day-actions select { width: auto; margin: 0; padding: 6px 8px; font-size: 13px; }
 
 /* ---------- schedule ---------- */
 .sched-card { padding: 10px; }

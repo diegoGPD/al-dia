@@ -289,6 +289,48 @@ if (!hasColumn('locations', 'pd_store_id')) {
            CREATE INDEX IF NOT EXISTS idx_pd_orders_loc_date ON pd_orders(location_id, date);`);
 }
 
+// Turn-based scheduling: turns (label + times per day) with people dropped in.
+if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='turns'`).get()) {
+  db.exec(`
+    CREATE TABLE turns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      date TEXT NOT NULL,
+      label TEXT NOT NULL,
+      start_min INTEGER NOT NULL,
+      end_min INTEGER NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX idx_turns_loc_date ON turns(location_id, date);
+    CREATE TABLE turn_assignments (
+      turn_id INTEGER NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+      employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+      PRIMARY KEY (turn_id, employee_id)
+    );
+    CREATE TABLE turn_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      turns_json TEXT NOT NULL
+    );
+  `);
+  // Migrate any existing per-person shifts into equivalent turns so history
+  // (and the labor already booked into P&L) is preserved exactly.
+  const oldShifts = db.prepare('SELECT * FROM shifts ORDER BY date, start_min').all();
+  const findTurn = db.prepare(
+    'SELECT id FROM turns WHERE location_id = ? AND date = ? AND start_min = ? AND end_min = ?');
+  const makeTurn = db.prepare(
+    'INSERT INTO turns (location_id, date, label, start_min, end_min) VALUES (?,?,?,?,?)');
+  const assign = db.prepare(
+    'INSERT OR IGNORE INTO turn_assignments (turn_id, employee_id) VALUES (?,?)');
+  for (const s of oldShifts) {
+    let turn = findTurn.get(s.location_id, s.date, s.start_min, s.end_min);
+    const turnId = turn ? turn.id
+      : Number(makeTurn.run(s.location_id, s.date, 'Turno', s.start_min, s.end_min).lastInsertRowid);
+    assign.run(turnId, s.employee_id);
+  }
+}
+
 // Quick-entry links (write-only cost form, one per user, revocable).
 if (!hasColumn('oneoff_costs', 'receipt')) {
   db.exec(`ALTER TABLE oneoff_costs ADD COLUMN receipt TEXT;

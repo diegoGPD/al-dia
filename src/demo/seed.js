@@ -185,22 +185,29 @@ function seed() {
   const empIds = team.map(([name, position, type, rate]) => Number(db.prepare(
     `INSERT INTO employees (location_id, name, position, pay_type, rate) VALUES (?,?,?,?,?)`)
     .run(loc1, name, position, type, rate).lastInsertRowid));
+  const insTurn = db.prepare(
+    'INSERT INTO turns (location_id, date, label, start_min, end_min, position) VALUES (?,?,?,?,?,?)');
+  const insAssign = db.prepare('INSERT OR IGNORE INTO turn_assignments (turn_id, employee_id) VALUES (?,?)');
   const thisMonday = mondayOf(today);
   for (let w = -3; w <= 1; w++) { // 3 past weeks, current, next
     for (let d = 0; d < 7; d++) {
       const date = addDays(thisMonday, w * 7 + d);
       const dayNum = dow(date);
-      for (const [idx, id] of empIds.entries()) {
-        if (dayNum === 1 && idx > 1) continue;        // slow Mondays: skeleton crew
-        if (idx % 6 === (d + idx) % 6) continue;      // everyone gets ~1 day off
-        const start = idx < 2 ? 9 * 60 : 12 * 60;     // kitchen opens early
-        const end = dayNum >= 5 ? 23 * 60 : 21 * 60 + 30;
-        db.prepare(`INSERT INTO shifts (location_id, employee_id, date, start_min, end_min)
-          VALUES (?,?,?,?,?) ON CONFLICT (employee_id, date) DO NOTHING`)
-          .run(loc1, id, date, start, end);
-      }
+      const closeAt = dayNum === 5 || dayNum === 6 ? 23 * 60 : 21 * 60 + 30;
+      const manana = Number(insTurn.run(loc1, date, 'Mañana', 9 * 60, 16 * 60, 0).lastInsertRowid);
+      const tarde = Number(insTurn.run(loc1, date, 'Tarde', 15 * 60 + 30, closeAt, 1).lastInsertRowid);
+      empIds.forEach((id, idx) => {
+        if (dayNum === 1 && idx > 2) return;          // slow Mondays: skeleton crew
+        if (idx % 6 === (d + idx) % 6) return;        // everyone gets ~1 day off
+        insAssign.run(idx % 2 === 0 ? manana : tarde, id);
+        if (idx === 0 && dayNum >= 5) insAssign.run(tarde, id); // Carlos doubles on weekends
+      });
     }
   }
+  db.prepare('INSERT INTO turn_templates (location_id, name, turns_json) VALUES (?,?,?)')
+    .run(loc1, 'Día normal', JSON.stringify([
+      { label: 'Mañana', start_min: 540, end_min: 960 },
+      { label: 'Tarde', start_min: 930, end_min: 1290 }]));
 
   // ---- loyalty ----
   db.prepare(`UPDATE loyalty_config SET program_name = ?, stamps_needed = 8, reward_text = ? WHERE id = 1`)

@@ -16,28 +16,44 @@ App.ui = (() => {
     onBind(wrap, () => wrap.remove());
   }
 
-  // ---- period switcher (day/week/month + prev/next) ----
+  // ---- period switcher (day/week/month/custom + prev/next) ----
+  function customRange() {
+    if (!state.customStart) state.customStart = addDays(today(), -13);
+    if (!state.customEnd) state.customEnd = today();
+    return { start: state.customStart, end: state.customEnd };
+  }
+
   function periodBar(d) {
-    const label = state.granularity === 'day' ? fmtDate(state.anchor, { weekday: 'long', month: 'long', day: 'numeric' })
+    const isCustom = state.granularity === 'custom';
+    const label = isCustom ? fmtRange(d.current.start, d.current.periodEnd || d.current.end)
+      : state.granularity === 'day' ? fmtDate(state.anchor, { weekday: 'long', month: 'long', day: 'numeric' })
       : state.granularity === 'week' ? fmtRange(d.current.start, d.current.periodEnd || d.current.end)
       : new Date(state.anchor + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    const cr = customRange();
     return `
     <div class="period-bar">
       <div class="seg">
-        ${['day', 'week', 'month'].map(g =>
+        ${['day', 'week', 'month', 'custom'].map(g =>
           `<button class="seg-btn ${state.granularity === g ? 'on' : ''}" data-gran="${g}">${g[0].toUpperCase() + g.slice(1)}</button>`).join('')}
       </div>
+      ${isCustom ? `
+      <div class="custom-range">
+        <input type="date" id="crStart" value="${cr.start}">
+        <span class="hint">→</span>
+        <input type="date" id="crEnd" value="${cr.end}">
+        <button class="btn tiny" id="crApply">Apply</button>
+      </div>` : ''}
       <div class="period-nav">
         <button class="icon-btn" id="prevPeriod" aria-label="Previous">‹</button>
         <span class="period-label">${esc(label)}</span>
         <button class="icon-btn" id="nextPeriod" aria-label="Next">›</button>
-        ${state.anchor !== today() ? '<button class="btn tiny" id="goToday">Today</button>' : ''}
+        ${!isCustom && state.anchor !== today() ? '<button class="btn tiny" id="goToday">Today</button>' : ''}
       </div>
     </div>`;
   }
 
   function bindPeriodBar(app) {
-    // Only the day/week/month buttons — not other .seg-btn elements like the
+    // Only the granularity buttons — not other .seg-btn elements like the
     // Costs/Accounts sub-tabs, whose handlers this would otherwise overwrite.
     app.querySelectorAll('.seg-btn[data-gran]').forEach(b => b.onclick = () => {
       state.granularity = b.dataset.gran;
@@ -45,18 +61,41 @@ App.ui = (() => {
       render();
     });
     const move = dir => {
-      state.anchor = state.granularity === 'month' ? addMonths(state.anchor, dir)
-        : addDays(state.anchor, dir * (state.granularity === 'week' ? 7 : 1));
+      if (state.granularity === 'custom') {
+        // slide the custom window by its own length
+        const cr = customRange();
+        const len = Math.round((Date.parse(cr.end) - Date.parse(cr.start)) / 864e5) + 1;
+        state.customStart = addDays(cr.start, dir * len);
+        state.customEnd = addDays(cr.end, dir * len);
+      } else {
+        state.anchor = state.granularity === 'month' ? addMonths(state.anchor, dir)
+          : addDays(state.anchor, dir * (state.granularity === 'week' ? 7 : 1));
+      }
       render();
     };
     app.querySelector('#prevPeriod').onclick = () => move(-1);
     app.querySelector('#nextPeriod').onclick = () => move(1);
     const t = app.querySelector('#goToday');
     if (t) t.onclick = () => { state.anchor = today(); render(); };
+    const apply = app.querySelector('#crApply');
+    if (apply) apply.onclick = () => {
+      const s = app.querySelector('#crStart').value, e = app.querySelector('#crEnd').value;
+      if (!s || !e) return;
+      state.customStart = s <= e ? s : e;
+      state.customEnd = s <= e ? e : s;
+      render();
+    };
   }
 
-  const fetchDashboard = () =>
-    api(`/dashboard?${qLoc()}&granularity=${state.granularity}&date=${state.anchor}`);
+  function periodQuery() {
+    if (state.granularity === 'custom') {
+      const cr = customRange();
+      return `granularity=custom&start=${cr.start}&end=${cr.end}&date=${today()}`;
+    }
+    return `granularity=${state.granularity}&date=${state.anchor}`;
+  }
+
+  const fetchDashboard = () => api(`/dashboard?${qLoc()}&${periodQuery()}`);
 
   // ---- SVG trend chart, no dependencies ----
   function trendChart(rows) {
@@ -100,5 +139,5 @@ App.ui = (() => {
     });
   }
 
-  return { isOwner, qLoc, modal, periodBar, bindPeriodBar, fetchDashboard, trendChart, moveDayDialog };
+  return { isOwner, qLoc, modal, periodBar, bindPeriodBar, fetchDashboard, periodQuery, trendChart, moveDayDialog };
 })();

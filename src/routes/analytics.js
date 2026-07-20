@@ -8,21 +8,38 @@ const fc = require('../forecast');
 
 module.exports = (r) => {
   r.get('/dashboard', checkLocation, (req, res) => {
-    const granularity = ['day', 'week', 'month'].includes(req.query.granularity) ? req.query.granularity : 'day';
+    const granularity = ['day', 'week', 'month', 'custom'].includes(req.query.granularity) ? req.query.granularity : 'day';
     const anchor = !badDate(req.query.date) ? req.query.date : todayStr();
 
-    const bounds = periodBounds(granularity, anchor);
+    // Custom: explicit start/end; everything else derives from the anchor.
+    let bounds;
+    if (granularity === 'custom') {
+      let s = !badDate(req.query.start) ? req.query.start : todayStr();
+      let e = !badDate(req.query.end) ? req.query.end : todayStr();
+      if (e < s) [s, e] = [e, s];
+      bounds = { start: s, end: e };
+    } else {
+      bounds = periodBounds(granularity, anchor);
+    }
     const start = bounds.start;
-    // For a period still in progress, only count costs accrued up to the anchor
-    // date (otherwise a month view on the 5th already carries the whole month's rent).
-    const end = bounds.end > anchor && start <= anchor ? anchor : bounds.end;
+    // For a period still in progress, only count costs accrued up to today
+    // (otherwise a month view on the 5th already carries the whole month's rent).
+    const today = todayStr();
+    const clampTo = granularity === 'custom' ? today : anchor;
+    const end = bounds.end > clampTo && start <= clampTo ? clampTo : bounds.end;
     const current = calc.summary(req.locationId, start, end);
     current.periodEnd = bounds.end; // full period, for labels
     const be = calc.breakEven(req.locationId, start, end, current);
 
-    // Compare like with like: clamp the previous period to the same number
-    // of elapsed days as the current one.
-    const prevBounds = periodBounds(granularity, prevPeriodAnchor(granularity, anchor));
+    // Compare like with like: the immediately preceding period of the same
+    // length, clamped to the same number of elapsed days.
+    let prevBounds;
+    if (granularity === 'custom') {
+      const len = Math.round((Date.parse(bounds.end) - Date.parse(start)) / 864e5) + 1;
+      prevBounds = { start: addDays(start, -len), end: addDays(start, -1) };
+    } else {
+      prevBounds = periodBounds(granularity, prevPeriodAnchor(granularity, anchor));
+    }
     let prevEnd = prevBounds.end;
     if (end < bounds.end) {
       const elapsed = Math.round((Date.parse(end) - Date.parse(start)) / 864e5);
@@ -36,7 +53,7 @@ module.exports = (r) => {
       current, previous,
       breakEven: be,
       benchmarks: calc.benchmarks(current),
-      trend: calc.trend(req.locationId, end > anchor ? anchor : end, 30)
+      trend: calc.trend(req.locationId, end > today ? today : end, 30)
     });
   });
 

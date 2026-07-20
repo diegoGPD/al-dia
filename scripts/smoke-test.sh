@@ -53,13 +53,23 @@ chk "unassigned zero" 0 "$(echo "$A" | python3 -c 'import json,sys;print(round(j
 curl -s $C -X POST $B/transfers -d '{"location_id":1,"date":"2026-01-05","from_account_id":1,"to_account_id":2,"amount":1000}' >/dev/null
 chk "adjust wrong PIN" 403 "$(curl -s $C -X POST $B/accounts/adjust -d '{"location_id":1,"account_id":1,"new_balance":99,"pin":"0000"}' -o /dev/null -w '%{http_code}')"
 
-echo "== team =="
+echo "== team (turn-based) =="
 E=$(curl -s $C -X POST "$B/employees?location=1" -d '{"location_id":1,"name":"Ana","pay_type":"hourly","rate":65}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
-curl -s $C -X PUT $B/schedule/shift -d "{\"location_id\":1,\"employee_id\":$E,\"date\":\"2026-01-05\",\"start_min\":540,\"end_min\":1020}" >/dev/null
+TURN=$(curl -s $C -X POST "$B/schedule/turns?location=1" -d '{"location_id":1,"date":"2026-01-05","label":"Mañana","start_min":540,"end_min":1020}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
+curl -s $C -X POST "$B/schedule/turns/$TURN/assign?location=1" -d "{\"location_id\":1,\"employee_id\":$E}" >/dev/null
 S=$(curl -s $C "$B/schedule?location=1&week=2026-01-05")
-chk "8h shift cost" 520 "$(echo "$S" | python3 -c 'import json,sys;print(round(json.load(sys.stdin)["totals"]["cost"]))')"
+chk "8h turn cost" 520 "$(echo "$S" | python3 -c 'import json,sys;print(round(json.load(sys.stdin)["totals"]["cost"]))')"
 D2=$(curl -s $C "$B/dashboard?location=1&granularity=day&date=2026-01-05")
 chk "labor booked daily" 520 "$(echo "$D2" | python3 -c 'import json,sys;print(round(json.load(sys.stdin)["current"]["costs"]["labor"]))')"
+chk "save day template" 200 "$(curl -s $C -X POST "$B/schedule/templates?location=1" -d '{"location_id":1,"name":"Normal","date":"2026-01-05"}' -o /dev/null -w '%{http_code}')"
+chk "apply template" 200 "$(curl -s $C -X POST "$B/schedule/templates/1/apply?location=1" -d '{"location_id":1,"date":"2026-01-06"}' -o /dev/null -w '%{http_code}')"
+chk "copy last week" 200 "$(curl -s $C -X POST "$B/schedule/copy-last-week" -d '{"location_id":1,"week":"2026-01-12"}' -o /dev/null -w '%{http_code}')"
+S2=$(curl -s $C "$B/schedule?location=1&week=2026-01-12")
+chk "copied week keeps people" 520 "$(echo "$S2" | python3 -c 'import json,sys;print(round(json.load(sys.stdin)["totals"]["cost"]))')"
+echo "== custom period =="
+CP=$(curl -s $C "$B/dashboard?location=1&granularity=custom&start=2026-01-01&end=2026-01-10")
+chk "custom range respected" "2026-01-01" "$(echo "$CP" | python3 -c 'import json,sys;print(json.load(sys.stdin)["current"]["start"])')"
+chk "custom prev is preceding 10d" "2025-12-22" "$(echo "$CP" | python3 -c 'import json,sys;print(json.load(sys.stdin)["previous"]["start"])')"
 
 echo "== moves & edits =="
 chk "move revenue" 200 "$(curl -s $C -X POST $B/revenue/move -d '{"location_id":1,"from_date":"2026-01-05","to_date":"2026-01-06"}' -o /dev/null -w '%{http_code}')"

@@ -9,10 +9,19 @@ const BALANCE_PIN = process.env.BALANCE_PIN || '2374';
 
 module.exports = (r) => {
   r.get('/accounts-view', checkLocation, (req, res) => {
-    const granularity = ['day', 'week', 'month'].includes(req.query.granularity) ? req.query.granularity : 'day';
+    const granularity = ['day', 'week', 'month', 'custom'].includes(req.query.granularity) ? req.query.granularity : 'day';
     const anchor = !badDate(req.query.date) ? req.query.date : todayStr();
-    const bounds = periodBounds(granularity, anchor);
-    const end = bounds.end > anchor && bounds.start <= anchor ? anchor : bounds.end;
+    let bounds;
+    if (granularity === 'custom') {
+      let s = !badDate(req.query.start) ? req.query.start : todayStr();
+      let e = !badDate(req.query.end) ? req.query.end : todayStr();
+      if (e < s) [s, e] = [e, s];
+      bounds = { start: s, end: e };
+    } else {
+      bounds = periodBounds(granularity, anchor);
+    }
+    const clampTo = granularity === 'custom' ? todayStr() : anchor;
+    const end = bounds.end > clampTo && bounds.start <= clampTo ? clampTo : bounds.end;
     const view = calc.accountsView(req.locationId, bounds.start, end);
     view.granularity = granularity; view.anchor = anchor;
     view.start = bounds.start; view.end = end; view.periodEnd = bounds.end;

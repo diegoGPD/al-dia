@@ -351,19 +351,21 @@ function insights(locationId) {
     worstWeek: fullWeeks.length ? fullWeeks.reduce((b, w) => w.revenue < b.revenue ? w : b) : null
   };
 
-  // Scheduled labor cost per week vs revenue
+  // Scheduled labor cost per week vs revenue (turn-based)
   const laborWeek = (monday) => {
-    const shifts = db.prepare(
-      `SELECT s.*, e.pay_type, e.rate FROM shifts s JOIN employees e ON e.id = s.employee_id
-       WHERE s.location_id = ? AND s.date BETWEEN ? AND ?`)
+    const assigned = db.prepare(
+      `SELECT t.start_min, t.end_min, e.pay_type, e.rate
+       FROM turn_assignments ta JOIN turns t ON t.id = ta.turn_id
+       JOIN employees e ON e.id = ta.employee_id
+       WHERE t.location_id = ? AND t.date BETWEEN ? AND ?`)
       .all(locationId, monday, addDays(monday, 6));
-    if (!shifts.length) return null;
-    const hourly = shifts.filter(s => s.pay_type === 'hourly')
+    if (!assigned.length) return null;
+    const hourly = assigned.filter(s => s.pay_type === 'hourly')
       .reduce((sum, s) => sum + ((s.end_min <= s.start_min ? s.end_min + 1440 : s.end_min) - s.start_min) / 60 * s.rate, 0);
     const salaried = db.prepare(
       `SELECT COALESCE(SUM(rate),0) v FROM employees WHERE location_id = ? AND active = 1 AND pay_type = 'salary'`)
       .get(locationId).v;
-    return hourly + (shifts.length ? salaried : 0);
+    return hourly + salaried;
   };
   if (weeks.length >= 2) {
     const l0 = laborWeek(weeks[0].week), l1 = laborWeek(weeks[1].week);

@@ -1,13 +1,10 @@
-/* Al Día — team schedule */
+/* Al Día — team schedule (turn-based: define turns, drop names in) */
 'use strict';
 (() => {
   const { api, state, registerRoute, nav, render, loadMe,
           money, money2, pct, esc, fmtDate, fmtRange, today, addDays, addMonths, toast } = App;
   const { isOwner, qLoc, modal, periodBar, bindPeriodBar, fetchDashboard, moveDayDialog, trendChart } = App.ui;
 
-  // ======================================================================
-  // Team schedule
-  // ======================================================================
   let schedWeek = null; // Monday of the shown week
   const mondayOf = d => {
     const dt = new Date(d + 'T12:00:00');
@@ -18,19 +15,63 @@
     return `${h}:${String(m).padStart(2, '0')}`;
   };
   const toMin = t => { const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
+  const toHHMM = min => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
   const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   registerRoute('schedule', async () => {
     schedWeek = schedWeek || mondayOf(today());
-    const d = await api(`/schedule?${qLoc()}&week=${schedWeek}`);
+    const [d, templates] = await Promise.all([
+      api(`/schedule?${qLoc()}&week=${schedWeek}`),
+      api(`/schedule/templates?${qLoc()}`)
+    ]);
     schedWeek = d.week;
+    const empById = Object.fromEntries(d.employees.map(e => [e.id, e]));
     const perEmp = Object.fromEntries(d.perEmployee.map(p => [p.employee_id, p]));
-    const shiftMap = {};
-    d.shifts.forEach(s => { shiftMap[`${s.employee_id}|${s.date}`] = s; });
-    const isToday = date => date === today();
-
     const budgetPill = { over: ['bad', 'Over budget'], under: ['warn', 'Under budget'], ok: ['good', 'On budget'], na: ['', ''] }[d.budget.flag];
     const overtime = d.employees.filter(e => perEmp[e.id]?.overtime);
+
+    const dayBlock = (date, i) => {
+      const turns = d.turns.filter(t => t.date === date);
+      return `
+      <details class="day-block" ${date === today() ? 'open' : ''}>
+        <summary><strong>${DAY_NAMES[i]} ${date.slice(8)}</strong>
+          <span class="hint">${turns.length ? `${turns.length} turn${turns.length > 1 ? 's' : ''} · ${turns.reduce((s, t) => s + t.employee_ids.length, 0)} people` : 'no turns yet'}</span>
+        </summary>
+        ${turns.map(t => `
+          <div class="turn-card">
+            <div class="turn-head">
+              <div><strong>${esc(t.label)}</strong>
+                <span class="hint">${fmtTime(t.start_min)} – ${fmtTime(t.end_min)} · ${t.hours.toFixed(1)}h</span></div>
+              <div>
+                <button class="icon-btn edit-turn" data-turn="${t.id}" aria-label="Edit">✎</button>
+                <button class="icon-btn danger del-turn" data-turn="${t.id}" aria-label="Delete">✕</button>
+              </div>
+            </div>
+            <div class="turn-people">
+              ${t.employee_ids.map(id => `
+                <span class="person-chip">${esc(empById[id]?.name || '?')}
+                  <button class="chip-x" data-turn="${t.id}" data-emp="${id}" aria-label="Remove">✕</button></span>`).join('')}
+              ${(() => {
+                const free = d.employees.filter(e => !t.employee_ids.includes(e.id));
+                return free.length ? `
+                  <select class="add-person" data-turn="${t.id}">
+                    <option value="">+ Add…</option>
+                    ${free.map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('')}
+                  </select>` : '';
+              })()}
+            </div>
+          </div>`).join('')}
+        <div class="day-actions">
+          <button class="btn tiny add-turn" data-date="${date}">+ Turn</button>
+          ${templates.length ? `
+            <select class="apply-tpl" data-date="${date}">
+              <option value="">Apply template…</option>
+              ${templates.map(t => `<option value="${t.id}">${esc(t.name)} (${t.turns.length})</option>`).join('')}
+            </select>` : ''}
+          ${turns.length ? `<button class="btn tiny save-tpl" data-date="${date}">💾 Save as template</button>` : ''}
+        </div>
+      </details>`;
+    };
 
     return `
       <h2 class="page-title">Team schedule</h2>
@@ -41,53 +82,32 @@
         ${schedWeek !== mondayOf(today()) ? '<button class="btn tiny" id="thisWeek">This week</button>' : ''}
       </div></div>
 
-      ${d.employees.length === 0 ? `
-        <div class="card"><div class="card-title">No employees yet</div>
-          <p class="hint">Add your team below and the schedule grid appears here.</p></div>` : `
-      <div class="card sched-card">
-        <div class="sched-scroll">
-          <table class="sched">
-            <thead><tr><th class="sched-name">Employee</th>
-              ${d.days.map((dt, i) => `<th class="${isToday(dt) ? 'today' : ''}">${DAY_NAMES[i]}<div class="hint">${dt.slice(8)}</div></th>`).join('')}
-              <th>Hrs</th><th>Cost</th></tr></thead>
-            <tbody>
-              ${d.employees.map(e => `
-                <tr>
-                  <td class="sched-name"><strong>${esc(e.name)}</strong>
-                    <div class="hint">${esc(e.position || '')}${perEmp[e.id]?.overtime ? ' <span class="pill warn">+48h</span>' : ''}</div></td>
-                  ${d.days.map(dt => {
-                    const s = shiftMap[`${e.id}|${dt}`];
-                    return `<td><button class="shift-cell ${s ? 'filled' : ''} ${isToday(dt) ? 'today' : ''}"
-                      data-emp="${e.id}" data-date="${dt}" data-name="${esc(e.name)}"
-                      data-start="${s ? s.start_min : ''}" data-end="${s ? s.end_min : ''}">
-                      ${s ? `${fmtTime(s.start_min)}<br>${fmtTime(s.end_min)}` : '+'}</button></td>`;
-                  }).join('')}
-                  <td class="sched-num">${(perEmp[e.id]?.hours || 0).toFixed(1)}</td>
-                  <td class="sched-num">${money(perEmp[e.id]?.cost || 0)}${e.pay_type === 'salary' ? '<div class="hint">salary</div>' : ''}</td>
-                </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
+      <div class="card">
+        <div class="card-title">This week's labor cost</div>
+        <div class="be-row"><span>Scheduled (${d.totals.hours.toFixed(1)} h total)</span><strong>${money(d.totals.cost)}</strong></div>
+        ${d.budget.amount > 0 ? `
+          <div class="be-row"><span>Budgeted payroll</span><strong>${money(d.budget.amount)}</strong></div>
+          <div class="be-row"><span>Difference</span>
+            <strong>${d.totals.cost >= d.budget.amount ? '+' : ''}${money(d.totals.cost - d.budget.amount)}
+            <span class="pill ${budgetPill[0]}">${budgetPill[1]}</span></strong></div>` : ''}
+        ${overtime.length ? `<div class="hint">⚠ Over 48 h/week: ${overtime.map(e => esc(e.name)).join(', ')} — heads-up, not legal advice.</div>` : ''}
+        ${d.perEmployee.some(p => p.hours > 0) ? `
+        <details><summary class="hint">Hours & cost per person</summary>
+          ${d.perEmployee.filter(p => p.hours > 0 || empById[p.employee_id]?.pay_type === 'salary').map(p => `
+            <div class="bd-row"><div class="bd-name">${esc(empById[p.employee_id]?.name || '?')}</div>
+              <div class="bd-amt">${money(p.cost)}</div>
+              <div class="bd-inv hint">${p.hours.toFixed(1)}h${empById[p.employee_id]?.pay_type === 'salary' ? ' · salary' : ''}</div></div>`).join('')}
+        </details>` : ''}
+        <div class="hint">Labor books itself into your numbers day by day — nothing to log elsewhere.</div>
         <div class="sched-actions">
           <button class="btn tiny" id="copyWeek">⧉ Copy last week</button>
           <button class="btn tiny" id="exportPng">⬇ Export as image</button>
         </div>
       </div>
 
-      <div class="card">
-        <div class="card-title">This week's labor cost</div>
-        <div class="be-row"><span>Scheduled (${d.totals.hours.toFixed(1)} h total)</span><strong>${money(d.totals.cost)}</strong></div>
-        ${d.budget.amount > 0 ? `
-          <div class="be-row"><span>Budgeted payroll (recurring costs tagged "labor")</span><strong>${money(d.budget.amount)}</strong></div>
-          <div class="be-row"><span>Difference</span>
-            <strong>${d.totals.cost >= d.budget.amount ? '+' : ''}${money(d.totals.cost - d.budget.amount)}
-            <span class="pill ${budgetPill[0]}">${budgetPill[1]}</span></strong></div>`
-          : `<div class="hint">Tag a recurring cost category as "labor" in Settings and add your payroll there to compare scheduled vs budgeted cost.</div>`}
-        ${overtime.length ? `<div class="hint">⚠ Over 48 h/week (typical Mexican full-time standard): ${overtime.map(e => esc(e.name)).join(', ')}. Just a heads-up, not legal advice.</div>` : ''}
-        <div class="hint">This cost books itself into your numbers automatically, spread day by day — hourly people on the days they work, salaries split across the week. No need to log it as a cost anywhere else.</div>
-      </div>`}
+      ${d.days.map((date, i) => dayBlock(date, i)).join('')}
 
-      <details class="card" id="rosterBox">
+      <details class="card" id="rosterBox" style="margin-top:14px">
         <summary class="card-title">Manage employees (${d.employees.length})</summary>
         ${d.employees.map(e => `
           <div class="list-row" data-emp="${e.id}">
@@ -121,23 +141,57 @@
     const tw = app.querySelector('#thisWeek');
     if (tw) tw.onclick = () => { schedWeek = mondayOf(today()); rerender(); };
 
-    // shift cells
-    app.querySelectorAll('.shift-cell').forEach(btn => btn.onclick = () => shiftDialog(btn));
+    // turns
+    app.querySelectorAll('.add-turn').forEach(b => b.onclick = () => turnDialog(b.dataset.date, null));
+    app.querySelectorAll('.edit-turn').forEach(b => b.onclick = async () => {
+      const d = await api(`/schedule?${qLoc()}&week=${schedWeek}`);
+      const t = d.turns.find(x => x.id === Number(b.dataset.turn));
+      if (t) turnDialog(t.date, t);
+    });
+    app.querySelectorAll('.del-turn').forEach(b => b.onclick = async () => {
+      if (!confirm('Delete this turn (and its assignments)?')) return;
+      await api(`/schedule/turns/${b.dataset.turn}?${qLoc()}`, { method: 'DELETE' });
+      toast('Turn deleted'); rerender();
+    });
 
-    // copy last week
-    const cp = app.querySelector('#copyWeek');
-    if (cp) cp.onclick = async () => {
-      if (!confirm('Replace this week with a copy of last week\'s schedule?')) return;
+    // people in / out of turns
+    app.querySelectorAll('.add-person').forEach(sel => sel.onchange = async () => {
+      if (!sel.value) return;
+      await api(`/schedule/turns/${sel.dataset.turn}/assign?${qLoc()}`, {
+        method: 'POST', body: { location_id: state.locationId, employee_id: Number(sel.value) } });
+      rerender();
+    });
+    app.querySelectorAll('.chip-x').forEach(x => x.onclick = async () => {
+      await api(`/schedule/turns/${x.dataset.turn}/assign/${x.dataset.emp}?${qLoc()}`, { method: 'DELETE' });
+      rerender();
+    });
+
+    // templates
+    app.querySelectorAll('.apply-tpl').forEach(sel => sel.onchange = async () => {
+      if (!sel.value) return;
+      if (!confirm("Replace this day's turns with the template? (People are not copied.)")) { sel.value = ''; return; }
+      await api(`/schedule/templates/${sel.value}/apply?${qLoc()}`, {
+        method: 'POST', body: { location_id: state.locationId, date: sel.dataset.date } });
+      toast('Template applied'); rerender();
+    });
+    app.querySelectorAll('.save-tpl').forEach(b => b.onclick = async () => {
+      const name = prompt('Template name (e.g. "Weekday", "Weekend"):');
+      if (!name) return;
+      await api(`/schedule/templates?${qLoc()}`, {
+        method: 'POST', body: { location_id: state.locationId, name, date: b.dataset.date } });
+      toast('Template saved'); rerender();
+    });
+
+    // copy last week / export
+    app.querySelector('#copyWeek').onclick = async () => {
+      if (!confirm('Replace this week with a copy of last week (turns and people)?')) return;
       try {
         const r = await api('/schedule/copy-last-week', { method: 'POST',
           body: { location_id: state.locationId, week: schedWeek } });
-        toast(`Copied ${r.copied} shifts`); rerender();
+        toast(`Copied ${r.copied} turns`); rerender();
       } catch (err) { toast(err.message, true); }
     };
-
-    // PNG export
-    const ex = app.querySelector('#exportPng');
-    if (ex) ex.onclick = () => exportSchedulePng();
+    app.querySelector('#exportPng').onclick = () => exportSchedulePng();
 
     // roster
     const form = app.querySelector('#empForm');
@@ -160,38 +214,43 @@
     app.querySelectorAll('.edit-emp').forEach(b => b.onclick = () => empDialog(b.closest('.list-row').dataset.emp));
   });
 
-  function shiftDialog(btn) {
-    const { emp, date, name } = btn.dataset;
-    const start = btn.dataset.start !== '' ? fmtTime(Number(btn.dataset.start)).padStart(5, '0') : '09:00';
-    const end = btn.dataset.end !== '' ? fmtTime(Number(btn.dataset.end)).padStart(5, '0') : '17:00';
-    const pad = t => { const [h, m] = t.split(':'); return `${h.padStart(2, '0')}:${m}`; };
+  // Fast turn creation: remembers your last label + times as defaults.
+  function turnDialog(date, existing) {
+    const last = JSON.parse(localStorage.getItem('aldia_last_turn') || '{"label":"Turno","s":"09:00","e":"17:00"}');
+    const label = existing ? existing.label : last.label;
+    const s = existing ? toHHMM(existing.start_min) : last.s;
+    const e = existing ? toHHMM(existing.end_min) : last.e;
     modal(`
-      <h3>${esc(name)} — ${fmtDate(date)}</h3>
-      <form id="shiftForm">
+      <h3>${existing ? 'Edit turn' : 'New turn'} — ${fmtDate(date)}</h3>
+      <form id="turnForm">
+        <label>Label<input name="label" value="${esc(label)}" required list="turnLabels"></label>
+        <datalist id="turnLabels">
+          <option value="Mañana"><option value="Tarde"><option value="Noche">
+          <option value="Cierre"><option value="Fin de semana">
+        </datalist>
         <div class="row2">
-          <label>Starts<input type="time" name="start" value="${pad(start)}" required></label>
-          <label>Ends<input type="time" name="end" value="${pad(end)}" required></label>
+          <label>Starts<input type="time" name="start" value="${s}" required></label>
+          <label>Ends<input type="time" name="end" value="${e}" required></label>
         </div>
-        <p class="hint">If it ends past midnight, just set the end time earlier than the start — it counts to the next day.</p>
+        <p class="hint">Ends past midnight? Set the end earlier than the start — it counts into the next day. Turns may overlap for handoffs.</p>
         <div class="modal-actions">
-          ${btn.dataset.start !== '' ? '<button type="button" class="btn danger-btn" id="clearShift">Clear shift</button>' : ''}
           <button type="button" class="btn" data-close>Cancel</button>
-          <button type="submit" class="btn primary">Save</button>
+          <button type="submit" class="btn primary">${existing ? 'Save' : 'Add turn'}</button>
         </div>
       </form>`, (wrap, close) => {
       wrap.querySelector('[data-close]').onclick = close;
-      const clear = wrap.querySelector('#clearShift');
-      if (clear) clear.onclick = async () => {
-        await api(`/schedule/shift?${qLoc()}&employee_id=${emp}&date=${date}`, { method: 'DELETE' });
-        close(); render();
-      };
-      wrap.querySelector('#shiftForm').onsubmit = async e => {
-        e.preventDefault();
-        const f = new FormData(e.target);
+      wrap.querySelector('#turnForm').onsubmit = async ev => {
+        ev.preventDefault();
+        const f = new FormData(ev.target);
+        const body = {
+          location_id: state.locationId, date,
+          label: f.get('label'), start_min: toMin(f.get('start')), end_min: toMin(f.get('end'))
+        };
         try {
-          await api('/schedule/shift', { method: 'PUT', body: {
-            location_id: state.locationId, employee_id: Number(emp), date,
-            start_min: toMin(f.get('start')), end_min: toMin(f.get('end')) } });
+          if (existing) await api(`/schedule/turns/${existing.id}?${qLoc()}`, { method: 'PUT', body });
+          else await api(`/schedule/turns?${qLoc()}`, { method: 'POST', body });
+          localStorage.setItem('aldia_last_turn',
+            JSON.stringify({ label: f.get('label'), s: f.get('start'), e: f.get('end') }));
           close(); render();
         } catch (err) { toast(err.message, true); }
       };
@@ -232,15 +291,18 @@
     });
   }
 
-  // Draws the week to a canvas and downloads a PNG — names, days and times only.
+  // PNG export: days × turns with names — no pay information.
   async function exportSchedulePng() {
     const d = await api(`/schedule?${qLoc()}&week=${schedWeek}`);
     const locName = state.me.locations.find(l => l.id === state.locationId)?.name || '';
-    const shiftMap = {};
-    d.shifts.forEach(s => { shiftMap[`${s.employee_id}|${s.date}`] = s; });
+    const empById = Object.fromEntries(d.employees.map(e => [e.id, e]));
 
-    const nameW = 170, dayW = 110, rowH = 52, headH = 84, dayHeadH = 44;
-    const W = nameW + dayW * 7 + 2, H = headH + dayHeadH + rowH * d.employees.length + 16;
+    const colW = 165, headH = 84, dayHeadH = 34, pad = 8;
+    const blockH = t => 40 + t.employee_ids.length * 16 + 8;
+    const colHeights = d.days.map(date =>
+      d.turns.filter(t => t.date === date).reduce((s, t) => s + blockH(t) + 6, 0));
+    const bodyH = Math.max(120, ...colHeights) + 16;
+    const W = colW * 7 + 2, H = headH + dayHeadH + bodyH;
     const scale = 2;
     const cv = document.createElement('canvas');
     cv.width = W * scale; cv.height = H * scale;
@@ -248,61 +310,45 @@
     ctx.scale(scale, scale);
 
     ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
-    // header
     ctx.fillStyle = '#1a7f5a'; ctx.fillRect(0, 0, W, headH);
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#fff';
     ctx.font = '700 22px -apple-system, Segoe UI, Roboto, sans-serif';
     ctx.fillText(locName, 16, 34);
     ctx.font = '400 15px -apple-system, Segoe UI, Roboto, sans-serif';
-    ctx.fillText(`Week: ${fmtRange(d.days[0], d.days[6])}`, 16, 60);
+    ctx.fillText(`Semana: ${fmtRange(d.days[0], d.days[6])}`, 16, 60);
 
-    // day headers
     ctx.fillStyle = '#f5f7f6'; ctx.fillRect(0, headH, W, dayHeadH);
-    ctx.fillStyle = '#1e2a26';
-    ctx.font = '700 13px -apple-system, Segoe UI, Roboto, sans-serif';
-    d.days.forEach((dt, i) => {
-      const x = nameW + i * dayW;
-      ctx.fillText(`${DAY_NAMES[i]} ${dt.slice(8)}`, x + 10, headH + 27);
-    });
-
-    // rows
-    d.employees.forEach((e, r) => {
-      const y = headH + dayHeadH + r * rowH;
-      if (r % 2 === 1) { ctx.fillStyle = '#f8faf9'; ctx.fillRect(0, y, W, rowH); }
+    d.days.forEach((date, i) => {
       ctx.fillStyle = '#1e2a26';
-      ctx.font = '700 14px -apple-system, Segoe UI, Roboto, sans-serif';
-      ctx.fillText(e.name.slice(0, 20), 12, y + 22);
-      if (e.position) {
-        ctx.fillStyle = '#64756e';
-        ctx.font = '400 12px -apple-system, Segoe UI, Roboto, sans-serif';
-        ctx.fillText(e.position.slice(0, 22), 12, y + 40);
-      }
-      d.days.forEach((dt, i) => {
-        const s = shiftMap[`${e.id}|${dt}`];
-        const x = nameW + i * dayW;
-        if (s) {
-          ctx.fillStyle = '#e6f4ee';
-          ctx.fillRect(x + 4, y + 6, dayW - 8, rowH - 12);
-          ctx.fillStyle = '#14684a';
-          ctx.font = '600 13px -apple-system, Segoe UI, Roboto, sans-serif';
-          ctx.fillText(`${fmtTime(s.start_min)} – ${fmtTime(s.end_min)}`, x + 12, y + 31);
-        } else {
-          ctx.fillStyle = '#c8d2cd';
-          ctx.font = '400 13px -apple-system, Segoe UI, Roboto, sans-serif';
-          ctx.fillText('—', x + 12, y + 31);
-        }
-      });
+      ctx.font = '700 13px -apple-system, Segoe UI, Roboto, sans-serif';
+      ctx.fillText(`${DAY_NAMES[i]} ${date.slice(8)}`, i * colW + pad, headH + 22);
     });
 
-    // grid lines
-    ctx.strokeStyle = '#e3e9e6'; ctx.lineWidth = 1;
+    d.days.forEach((date, i) => {
+      let y = headH + dayHeadH + 8;
+      const x = i * colW + pad;
+      for (const t of d.turns.filter(t => t.date === date)) {
+        const h = blockH(t);
+        ctx.fillStyle = '#e6f4ee';
+        if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, colW - pad * 2, h, 8); ctx.fill(); }
+        else ctx.fillRect(x, y, colW - pad * 2, h);
+        ctx.fillStyle = '#14684a';
+        ctx.font = '700 12px -apple-system, Segoe UI, Roboto, sans-serif';
+        ctx.fillText(t.label.slice(0, 18), x + 8, y + 16);
+        ctx.font = '600 11px -apple-system, Segoe UI, Roboto, sans-serif';
+        ctx.fillText(`${fmtTime(t.start_min)} – ${fmtTime(t.end_min)}`, x + 8, y + 31);
+        ctx.fillStyle = '#1e2a26';
+        ctx.font = '400 11px -apple-system, Segoe UI, Roboto, sans-serif';
+        t.employee_ids.forEach((id, k) => {
+          ctx.fillText('· ' + (empById[id]?.name || '?').slice(0, 20), x + 8, y + 46 + k * 16);
+        });
+        y += h + 6;
+      }
+    });
+
+    ctx.strokeStyle = '#e3e9e6';
     for (let i = 0; i <= 7; i++) {
-      const x = nameW + i * dayW;
-      ctx.beginPath(); ctx.moveTo(x, headH); ctx.lineTo(x, H - 16); ctx.stroke();
-    }
-    for (let r = 0; r <= d.employees.length; r++) {
-      const y = headH + dayHeadH + r * rowH;
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(i * colW, headH); ctx.lineTo(i * colW, H); ctx.stroke();
     }
 
     const a = document.createElement('a');
@@ -311,5 +357,4 @@
     a.click();
     toast('Schedule image downloaded');
   }
-
 })();
