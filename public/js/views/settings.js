@@ -88,10 +88,11 @@
   }
 
   async function posSection() {
-    const [info, pdInfo, pdRates] = await Promise.all([
+    const [info, pdInfo, pdRates, feed] = await Promise.all([
       api(`/webhooks/pos-info?${qLoc()}`),
       api(`/webhooks/pd-status?${qLoc()}`),
-      api(`/webhooks/pd-rates?${qLoc()}`)
+      api(`/webhooks/pd-rates?${qLoc()}`),
+      api('/external/feed-token')
     ]);
     const badge = { processed: 'good', stored: 'warn', error: 'bad', tracked: '' };
     const pdBlock = `
@@ -121,6 +122,18 @@
           <div class="hint">Writes the real rates onto your sales channels (editable any time under "Your categories"). After changing rates, use "Recalculate past commissions" above so history matches.</div>
         </details>
         <div class="hint">Orders arriving on the webhook above log themselves (completed orders only; cancellations reverse automatically, retries never double-count). POS orders with a payment method I can't classify (not cash/card/BanRegio) are counted in totals but flagged — never guessed. The reconciler also runs every 6 hours.</div>
+        <details style="margin-top:10px"><summary class="hint">Kitchen feed (external read-only API)</summary>
+          <p class="hint">For a local server that polls for new delivery-app orders (Uber Eats, Rappi, Didi Food only —
+            food items and notes, never customer or payment data). Orders appear as soon as they're created,
+            so the kitchen sees them while there's still food to make. Poll with the cursor from each response:</p>
+          <div class="webhook-url"><code>GET ${esc(feed.url)}?since=&lt;cursor&gt;<br>X-Feed-Token: ${esc(feed.token)}</code></div>
+          <p class="hint">First call: <code>?since=latest</code> to start from now, or <code>?since=0</code> for history.
+            ${feed.pending} orders in the feed so far.</p>
+          <div class="quick-actions">
+            <button class="btn tiny" id="feedCopy">📋 Copy token</button>
+            <button class="btn tiny" id="feedRegen">↻ Regenerate token</button>
+          </div>
+        </details>
       </div>`;
     return `
       <div class="card">
@@ -341,6 +354,16 @@
           if (!confirm('Pull every PideDirecto order from July 1 to today and rebuild those days? Existing manual entries on those days will be replaced by order data.')) return;
           try { showPdReport(await api(`/webhooks/pd-backfill?${qLoc()}`, { method: 'POST', body: { location_id: state.locationId, from: '2026-07-01' } })); }
           catch (err) { toast(err.message, true); }
+        };
+        app.querySelector('#feedCopy').onclick = async () => {
+          const r = await api('/external/feed-token');
+          await navigator.clipboard.writeText(r.token);
+          toast('Feed token copied');
+        };
+        app.querySelector('#feedRegen').onclick = async () => {
+          if (!confirm('Regenerate the feed token? The kitchen server stops working until it uses the new one.')) return;
+          await api('/external/feed-token/regenerate', { method: 'POST' });
+          toast('New token generated'); render();
         };
         app.querySelector('#pdApplyRates').onclick = async () => {
           if (!confirm('Set Uber 55%, Rappi 45%, Didi 50%, web 8%, POS card 5%, POS cash 0%, BanRegio 17% on your sales channels?')) return;

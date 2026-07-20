@@ -331,6 +331,27 @@ if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='tur
   }
 }
 
+// Kitchen feed: append-only log of completed delivery-app orders (items only),
+// polled by an external local server via an integer cursor. Plus named API
+// tokens for such single-purpose integrations.
+if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='external_feed'`).get()) {
+  db.exec(`
+    CREATE TABLE external_feed (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id TEXT NOT NULL UNIQUE,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      channel TEXT NOT NULL,
+      received_at TEXT NOT NULL DEFAULT (datetime('now')),
+      note TEXT,
+      items_json TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE TABLE app_tokens (
+      name TEXT PRIMARY KEY,
+      token TEXT NOT NULL
+    );
+  `);
+}
+
 // Quick-entry links (write-only cost form, one per user, revocable).
 if (!hasColumn('oneoff_costs', 'receipt')) {
   db.exec(`ALTER TABLE oneoff_costs ADD COLUMN receipt TEXT;

@@ -90,6 +90,49 @@ function extractOrder(payload) {
   };
 }
 
+// Food-prep info only, mapped from the documented orderItems structure —
+// no customer, address or payment data ever leaves through this path.
+function extractItems(o) {
+  const src = (o.order && typeof o.order === 'object') ? o.order : o;
+  const items = [];
+  for (const it of (Array.isArray(src.orderItems) ? src.orderItems : [])) {
+    const modifiers = [];
+    for (const g of (it.modifierGroups || [])) {
+      for (const m of (g.modifiers || [])) {
+        modifiers.push((m.quantity > 1 ? `${m.quantity}× ` : '') + (m.name || ''));
+        for (const sg of (m.subModifierGroups || [])) {
+          for (const sm of (sg.subModifiers || [])) {
+            modifiers.push((sm.quantity > 1 ? `${sm.quantity}× ` : '') + (sm.name || ''));
+          }
+        }
+      }
+    }
+    items.push({
+      name: it.name || '?',
+      quantity: it.quantity ?? 1,
+      ...(it.note ? { note: String(it.note) } : {}),
+      modifiers
+    });
+  }
+  return items;
+}
+
+const FEED_CHANNELS = ['UBER_EATS', 'RAPPI', 'DIDI_FOOD'];
+
+// Appends exactly once per order (order_id UNIQUE) — webhook retries and
+// reconciler overlaps can't duplicate feed entries. Emits on the FIRST event
+// we see for a delivery-app order (normally ORDER_CREATED), because the
+// kitchen needs it while there's still food to prepare — not at completion.
+function feedInsert(locationId, o, rawPayload) {
+  if (o.status === 'CANCELLED' || !FEED_CHANNELS.includes(o.channel)) return;
+  const items = extractItems(rawPayload || {});
+  const src = (rawPayload && rawPayload.order) || rawPayload || {};
+  const note = src.notes || src.instructions || null;
+  db.prepare(`INSERT OR IGNORE INTO external_feed (order_id, location_id, channel, note, items_json)
+    VALUES (?,?,?,?,?)`)
+    .run(o.orderId, locationId, o.channel, note ? String(note).slice(0, 300) : null, JSON.stringify(items));
+}
+
 function looksLikePideDirecto(payload) {
   if (!payload || typeof payload !== 'object') return false;
   const o = (payload.order && typeof payload.order === 'object') ? payload.order : payload;
@@ -211,11 +254,13 @@ async function processWebhook(locationId, payload) {
   if (!o) return { status: 'stored', note: 'PideDirecto-like payload without orderId — stored for inspection' };
 
   let enrichNote = '';
+  let fullRaw = payload;
   if ((o.amount <= 0 || !o.channel) && apiKeyPresent()) {
     try {
       const raw = await pdApi('getOrder', { orderId: o.orderId });
       const full = extractOrder(raw && typeof raw === 'object' ? raw : {});
       if (full) {
+        fullRaw = raw;
         o = { ...full,
           status: o.status !== 'OTHER' ? o.status : full.status,
           eventType: o.eventType || full.eventType };
@@ -228,6 +273,7 @@ async function processWebhook(locationId, payload) {
   }
 
   upsertOrder(locationId, o, 'webhook');
+  feedInsert(locationId, o, fullRaw);
   if (o.status === 'OTHER') {
     return { status: 'tracked', note: `Order ${o.orderId.slice(0, 8)}… ${o.eventType || 'update'} tracked (revenue only counts completed orders)${enrichNote}` };
   }
@@ -299,6 +345,7 @@ async function backfillRange(locationId, startIso, endIso) {
     const o = extractOrder(raw);
     if (!o) continue;
     upsertOrder(locationId, o, 'backfill');
+    feedInsert(locationId, o, raw);
     if (o.status === 'COMPLETE') {
       const catId = categoryFor(o.channel, o.paymentMethod);
       const key = catId
