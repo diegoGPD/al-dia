@@ -79,6 +79,12 @@ chk "former shown on request" 2 "$(curl -s $C "$B/employees?location=1&former=1"
 chk "assign outside range refused" 400 "$(curl -s $C -X POST "$B/schedule/turns/$TURN/assign?location=1" -d "{\"location_id\":1,\"employee_id\":$EMPF}" -o /dev/null -w '%{http_code}')"
 chk "channels endpoint" 200 "$(curl -s $C "$B/channels?location=1&granularity=custom&start=2026-01-01&end=2026-01-31" -o /dev/null -w '%{http_code}')"
 
+chk "recon locked without PIN" 423 "$(curl -s $C -X POST "$B/reconcile?location=1" -d "{\"location_id\":1,\"category_id\":$UBER,\"start\":\"2026-01-01\",\"end\":\"2026-01-31\",\"actual_net\":100}" -o /dev/null -w '%{http_code}')"
+chk "recon wrong PIN" 403 "$(curl -s $C -X POST $B/reconcile/unlock -d '{"pin":"0000"}' -o /dev/null -w '%{http_code}')"
+chk "recon unlock" 200 "$(curl -s $C -X POST $B/reconcile/unlock -d '{"pin":"2374"}' -o /dev/null -w '%{http_code}')"
+chk "recon saves" 200 "$(curl -s $C -X POST "$B/reconcile?location=1" -d "{\"location_id\":1,\"category_id\":$UBER,\"start\":\"2026-01-01\",\"end\":\"2026-01-31\",\"actual_net\":6500}" -o /dev/null -w '%{http_code}')"
+chk "actual overrides estimate" 500 "$(curl -s $C "$B/dashboard?location=1&granularity=custom&start=2026-01-01&end=2026-01-31" | python3 -c 'import json,sys;print(round(json.load(sys.stdin)["current"]["costs"]["commissionAdjustment"]))')"
+
 echo "== moves & edits =="
 chk "move revenue" 200 "$(curl -s $C -X POST $B/revenue/move -d '{"location_id":1,"from_date":"2026-01-05","to_date":"2026-01-06"}' -o /dev/null -w '%{http_code}')"
 chk "move back" 200 "$(curl -s $C -X POST $B/revenue/move -d '{"location_id":1,"from_date":"2026-01-06","to_date":"2026-01-05"}' -o /dev/null -w '%{http_code}')"

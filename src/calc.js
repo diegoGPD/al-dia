@@ -81,6 +81,43 @@ function laborForRange(locationId, start, end) {
   return total;
 }
 
+// ---------- payout reconciliation ----------
+// Once a real payout is known for a channel+window, it replaces the commission
+// estimate there. When the queried period only partly overlaps a reconciled
+// window, the correction is applied in proportion to the sales that fall inside
+// the overlap — so a day view shows its share and a month view the whole thing,
+// with no double counting.
+function reconciliationAdjustment(locationId, start, end) {
+  const recons = db.prepare(
+    `SELECT r.*, c.name channel FROM channel_reconciliations r
+     JOIN revenue_categories c ON c.id = r.category_id
+     WHERE r.location_id = ? AND r.start_date <= ? AND r.end_date >= ?`)
+    .all(locationId, end, start);
+  let total = 0;
+  const byChannel = [];
+  for (const r of recons) {
+    const oStart = r.start_date > start ? r.start_date : start;
+    const oEnd = r.end_date < end ? r.end_date : end;
+    if (oStart > oEnd) continue;
+    const overlapGross = db.prepare(
+      `SELECT COALESCE(SUM(ri.amount),0) v FROM revenue_items ri
+       JOIN revenue_entries re ON re.id = ri.entry_id
+       WHERE re.location_id = ? AND ri.category_id = ? AND re.date BETWEEN ? AND ?`)
+      .get(locationId, r.category_id, oStart, oEnd).v;
+    const share = r.gross > 0 ? overlapGross / r.gross : 0;
+    // Kept less than estimated -> commissions were understated (positive adj).
+    const adj = (r.estimated_net - r.actual_net) * share;
+    total += adj;
+    byChannel.push({
+      channel: r.channel, category_id: r.category_id,
+      window: `${r.start_date} → ${r.end_date}`,
+      estimated_net: r.estimated_net, actual_net: r.actual_net,
+      variance: r.actual_net - r.estimated_net, applied: adj, share
+    });
+  }
+  return { total, byChannel };
+}
+
 // ---------- period summary ----------
 function summary(locationId, start, end) {
   const revenue = db.prepare(
@@ -118,7 +155,12 @@ function summary(locationId, start, end) {
   const rec = recurringForRange(locationId, start, end);
   const labor = laborForRange(locationId, start, end);
 
-  const totalCosts = variable + commissions + oneoff + rec.total + labor;
+  // Real payouts override the commission estimate where they're known.
+  const recon = reconciliationAdjustment(locationId, start, end);
+  const commissionsEstimated = commissions;
+  const commissionsFinal = commissions + recon.total;
+
+  const totalCosts = variable + commissionsFinal + oneoff + rec.total + labor;
   const profit = revenue - totalCosts;
   // Scheduled labor counts as not-invoiced spend.
   const invoicedTotal = variableInvoiced + commissionsInvoiced + oneoffInvoiced + rec.invoiced;
@@ -134,7 +176,9 @@ function summary(locationId, start, end) {
     revenueByCategory: revByCat,
     costs: {
       variable, variableByCategory: varRows,
-      commissions, commissionsByChannel: revByCat.filter(r => r.commission > 0),
+      commissions: commissionsFinal, commissionsEstimated,
+      commissionAdjustment: recon.total, reconciliations: recon.byChannel,
+      commissionsByChannel: revByCat.filter(r => r.commission > 0),
       recurring: rec.total, recurringByCategory: rec.byCategory,
       oneoff, oneoffItems: oneoffRows,
       labor,
@@ -152,7 +196,7 @@ function summary(locationId, start, end) {
       oneoff: oneoffInvoiced
     },
     profit,
-    grossMargin: revenue > 0 ? (revenue - variable - commissions) / revenue : null,
+    grossMargin: revenue > 0 ? (revenue - variable - commissionsFinal) / revenue : null,
     netMargin: revenue > 0 ? profit / revenue : null,
     tagTotals: tag
   };
@@ -356,5 +400,5 @@ function benchmarks(sum) {
 module.exports = {
   summary, breakEven, trend, benchmarks,
   dailyRate, recurringForRange, accountsView,
-  laborForRange, laborMaps
+  laborForRange, laborMaps, reconciliationAdjustment
 };

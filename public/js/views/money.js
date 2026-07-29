@@ -65,6 +65,20 @@
         <div class="card-title">Commission by channel</div>
         <div class="hint" id="channelBody">Loading…</div>
       </div>
+      ${c.costs.reconciliations && c.costs.reconciliations.length ? `
+      <div class="card">
+        <div class="card-title">Real payouts applied to this period</div>
+        ${c.costs.reconciliations.map(r => `
+          <div class="bd-row"><div class="bd-name">${esc(r.channel)}<span class="hint"> · ${esc(r.window)}${r.share < 0.999 ? ` · ${Math.round(r.share * 100)}% of it falls here` : ''}</span></div>
+            <div class="bd-amt ${r.variance < 0 ? 'neg' : 'pos'}">${r.variance >= 0 ? '+' : ''}${money(r.variance)}</div>
+            <div class="bd-inv hint">est ${money(r.estimated_net)} → real ${money(r.actual_net)}</div></div>`).join('')}
+        <div class="hint">These figures replace the commission estimate in this period's profit, margin and break-even.
+          Estimated commissions were ${money(c.costs.commissionsEstimated)}; after corrections, ${money(c.costs.commissions)}.</div>
+      </div>` : ''}
+      <div class="card" id="reconCard">
+        <div class="card-title">🔒 Reconcile a real payout</div>
+        <div id="reconBody" class="hint">Loading…</div>
+      </div>
       <div class="card"><div class="card-title">Day-to-day costs by category</div>${catRows(c.costs.variableByCategory, false)}</div>
       <div class="card"><div class="card-title">Recurring costs by category</div>${catRows(c.costs.recurringByCategory, true)}</div>
       <div class="card"><div class="card-title">One-off costs</div>
@@ -80,7 +94,142 @@
   registerRoute('breakdown_bind', (app) => {
     bindPeriodBar(app);
     loadChannels(app);
+    if (isOwner()) loadReconcile(app);
+    else { const b = app.querySelector('#reconCard'); if (b) b.remove(); }
   });
+
+  // ---- PIN-gated payout reconciliation ----
+  async function loadReconcile(app) {
+    const box = app.querySelector('#reconBody');
+    if (!box) return;
+    const [status, chans, history] = await Promise.all([
+      api('/reconcile/status'),
+      api(`/channels?${qLoc()}&${periodQuery()}`),
+      api(`/reconcile/history?${qLoc()}`)
+    ]);
+
+    const historyHtml = history.length ? `
+      <details style="margin-top:12px"><summary class="hint">History (${history.length})</summary>
+        ${history.map(h => `
+          <div class="bd-row"><div class="bd-name">${esc(h.channel)}
+            <span class="hint">${h.start_date} → ${h.end_date} · saved ${h.created_at.slice(0, 10)}${h.note ? ' · ' + esc(h.note) : ''}</span></div>
+            <div class="bd-amt ${h.variance < 0 ? 'neg' : 'pos'}">${h.variance >= 0 ? '+' : ''}${money(h.variance)}</div>
+            <div class="bd-inv hint">${money(h.estimated_net)} → ${money(h.actual_net)}
+              ${status.unlocked ? `<button class="icon-btn danger del-recon" data-id="${h.id}" aria-label="Delete">✕</button>` : ''}</div></div>`).join('')}
+      </details>` : '';
+
+    if (!status.unlocked) {
+      box.innerHTML = `
+        <p class="hint">Entering real payouts overrides estimated figures, so it's PIN-protected.</p>
+        <form id="pinForm" class="row2">
+          <label>PIN<input type="password" inputmode="numeric" name="pin" placeholder="••••" autocomplete="off"></label>
+          <button class="btn primary" type="submit" style="align-self:end">Unlock</button>
+        </form>
+        ${historyHtml}`;
+      box.querySelector('#pinForm').onsubmit = async (e) => {
+        e.preventDefault();
+        try {
+          const r = await api('/reconcile/unlock', { method: 'POST', body: { pin: new FormData(e.target).get('pin') } });
+          toast(`Unlocked for ${r.minutes} minutes`);
+          loadReconcile(app);
+        } catch (err) { toast(err.message, true); }
+      };
+      return;
+    }
+
+    const withSales = chans.channels.filter(c => c.revenue > 0);
+    box.innerHTML = `
+      <p class="hint">Unlocked (${Math.round(status.expiresInSec / 60)} min left) ·
+        <a href="#" id="lockNow">lock now</a> · <a href="#" id="changePin">change PIN</a></p>
+      ${withSales.length ? `
+      <form id="reconForm">
+        <div class="row2">
+          <label>Channel
+            <select name="category_id">
+              ${withSales.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}
+            </select></label>
+          <label>Actual amount received
+            <input type="number" inputmode="decimal" step="any" min="0" name="actual_net" placeholder="0" required></label>
+        </div>
+        <div class="row2">
+          <label>From<input type="date" name="start" value="${chans.start}" required></label>
+          <label>To<input type="date" name="end" value="${chans.end}" required></label>
+        </div>
+        <label>Note <span class="hint">(optional)</span><input name="note" placeholder="Payout Uber semana 28"></label>
+        <div class="day-rev" id="reconPreview"></div>
+        <button class="btn primary full" type="submit">Save real payout</button>
+      </form>` : '<p class="hint">No channel sales in this period to reconcile.</p>'}
+      ${historyHtml}`;
+
+    box.querySelector('#lockNow').onclick = async (e) => {
+      e.preventDefault();
+      await api('/reconcile/lock', { method: 'POST' });
+      toast('Locked'); loadReconcile(app);
+    };
+    box.querySelector('#changePin').onclick = (e) => { e.preventDefault(); changePinDialog(); };
+    box.querySelectorAll('.del-recon').forEach(b => b.onclick = async () => {
+      if (!confirm('Delete this correction? The estimate applies again for that period.')) return;
+      await api(`/reconcile/${b.dataset.id}?${qLoc()}`, { method: 'DELETE' });
+      toast('Deleted'); render();
+    });
+
+    const form = box.querySelector('#reconForm');
+    if (!form) return;
+    const preview = box.querySelector('#reconPreview');
+    const refresh = async () => {
+      const f = new FormData(form);
+      try {
+        const p = await api(`/reconcile/preview?${qLoc()}&category_id=${f.get('category_id')}&start=${f.get('start')}&end=${f.get('end')}`);
+        const actual = Number(f.get('actual_net'));
+        const diff = actual ? actual - p.estimated_net : null;
+        preview.innerHTML = `Sold ${money(p.gross)} · estimated kept <strong>${money(p.estimated_net)}</strong>` +
+          (diff !== null && f.get('actual_net') !== ''
+            ? ` → actual <strong>${money(actual)}</strong> <span class="${diff < 0 ? 'neg' : 'pos'}">(${diff >= 0 ? '+' : ''}${money(diff)})</span>` : '') +
+          (p.overlapping.length ? `<br>⚠ Already reconciled ${p.overlapping[0].start_date} → ${p.overlapping[0].end_date}` : '');
+      } catch (err) { preview.textContent = err.message; }
+    };
+    form.querySelectorAll('select,input').forEach(el => el.addEventListener('change', refresh));
+    form.querySelector('[name=actual_net]').addEventListener('input', refresh);
+    refresh();
+
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const f = new FormData(form);
+      try {
+        const r = await api(`/reconcile?${qLoc()}`, { method: 'POST', body: {
+          location_id: state.locationId, category_id: Number(f.get('category_id')),
+          start: f.get('start'), end: f.get('end'),
+          actual_net: Number(f.get('actual_net')), note: f.get('note') } });
+        toast(`${r.channel}: estimated ${money(r.estimated_net)} → actual ${money(r.actual_net)} (${r.variance >= 0 ? '+' : ''}${money(r.variance)})`);
+        render();
+      } catch (err) { toast(err.message, true); }
+    };
+  }
+
+  function changePinDialog() {
+    modal(`
+      <h3>Change reconciliation PIN</h3>
+      <form id="pinChange">
+        <label>Current PIN<input type="password" inputmode="numeric" name="current_pin" required autocomplete="off"></label>
+        <label>New PIN <span class="hint">(4–8 digits)</span>
+          <input type="password" inputmode="numeric" name="new_pin" required pattern="\\d{4,8}" autocomplete="off"></label>
+        <div class="modal-actions">
+          <button type="button" class="btn" data-close>Cancel</button>
+          <button type="submit" class="btn primary">Change PIN</button>
+        </div>
+      </form>`, (wrap, close) => {
+      wrap.querySelector('[data-close]').onclick = close;
+      wrap.querySelector('#pinChange').onsubmit = async (e) => {
+        e.preventDefault();
+        const f = new FormData(e.target);
+        try {
+          await api('/reconcile/change-pin', { method: 'POST', body: {
+            current_pin: f.get('current_pin'), new_pin: f.get('new_pin') } });
+          close(); toast('PIN changed — reconciliation re-locked'); render();
+        } catch (err) { toast(err.message, true); }
+      };
+    });
+  }
 
   async function loadChannels(app) {
     const box = app.querySelector('#channelBody');

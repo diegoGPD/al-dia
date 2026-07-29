@@ -331,6 +331,26 @@ if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='tur
   }
 }
 
+// Channel payout reconciliation: the real amount kept for a channel over a
+// period, replacing the commission estimate for that window.
+if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='channel_reconciliations'`).get()) {
+  db.exec(`
+    CREATE TABLE channel_reconciliations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      category_id INTEGER NOT NULL REFERENCES revenue_categories(id) ON DELETE CASCADE,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      gross REAL NOT NULL,             -- sales through the channel in the window
+      estimated_net REAL NOT NULL,     -- what our commission % predicted we'd keep
+      actual_net REAL NOT NULL,        -- what the payout actually was
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX idx_recon_loc ON channel_reconciliations(location_id, start_date, end_date);
+  `);
+}
+
 // Employment dates: an employee only costs money inside their active range.
 if (!hasColumn('employees', 'start_date')) {
   db.exec(`ALTER TABLE employees ADD COLUMN start_date TEXT;
