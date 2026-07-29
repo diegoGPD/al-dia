@@ -4,7 +4,22 @@ const u2d = ms => new Date(ms).toISOString().slice(0, 10);
 
 const addDays = (s, n) => u2d(d2u(s) + n * 864e5);
 const daysBetween = (a, b) => Math.round((d2u(b) - d2u(a)) / 864e5);
-const todayStr = () => new Date().toISOString().slice(0, 10);
+
+// "Today" in the restaurant's timezone, not UTC. Mexico City is UTC-6 all year
+// (no DST since 2022). Without this the server rolls over to tomorrow at 18:00
+// local, which silently shifts days between periods depending on when a
+// calculation runs. Override with TZ_OFFSET_HOURS if you move timezones.
+const TZ_OFFSET_H = Number(process.env.TZ_OFFSET_HOURS ?? -6);
+const todayStr = () => new Date(Date.now() + TZ_OFFSET_H * 3600e3).toISOString().slice(0, 10);
+
+// The window actually used for a period: full period once it's over, clamped
+// to today while it's still running, full period if it's entirely ahead.
+// (Clamping to the *anchor* instead of today truncated every past week/month.)
+function effectiveEnd(bounds, today = todayStr()) {
+  if (bounds.end <= today) return bounds.end;   // finished period
+  if (bounds.start > today) return bounds.end;  // entirely in the future
+  return today;                                 // in progress
+}
 const dow = s => new Date(d2u(s)).getUTCDay();               // 0 = Sunday
 const mondayOf = s => addDays(s, -((dow(s) + 6) % 7));
 
@@ -29,4 +44,4 @@ function prevPeriodAnchor(granularity, anchor) {
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const badDate = d => !d || !DATE_RE.test(d);
 
-module.exports = { addDays, daysBetween, todayStr, dow, mondayOf, periodBounds, prevPeriodAnchor, badDate };
+module.exports = { addDays, daysBetween, todayStr, dow, mondayOf, periodBounds, prevPeriodAnchor, badDate, effectiveEnd };

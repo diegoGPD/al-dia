@@ -2,7 +2,7 @@
 const { db } = require('../db');
 const { requireOwner, checkLocation } = require('../auth');
 const { num } = require('../lib/parse');
-const { badDate, todayStr, addDays, periodBounds, prevPeriodAnchor } = require('../lib/dates');
+const { badDate, todayStr, addDays, periodBounds, prevPeriodAnchor, effectiveEnd } = require('../lib/dates');
 const calc = require('../calc');
 const fc = require('../forecast');
 
@@ -22,11 +22,9 @@ module.exports = (r) => {
       bounds = periodBounds(granularity, anchor);
     }
     const start = bounds.start;
-    // For a period still in progress, only count costs accrued up to today
-    // (otherwise a month view on the 5th already carries the whole month's rent).
+    // Finished periods count in full; a period still running stops at today.
     const today = todayStr();
-    const clampTo = granularity === 'custom' ? today : anchor;
-    const end = bounds.end > clampTo && start <= clampTo ? clampTo : bounds.end;
+    const end = effectiveEnd(bounds, today);
     const current = calc.summary(req.locationId, start, end);
     current.periodEnd = bounds.end; // full period, for labels
     const be = calc.breakEven(req.locationId, start, end, current);
@@ -40,6 +38,8 @@ module.exports = (r) => {
     } else {
       prevBounds = periodBounds(granularity, prevPeriodAnchor(granularity, anchor));
     }
+    // Only clamp the comparison when the CURRENT period is genuinely partial
+    // (i.e. still running) — never because a past period was truncated.
     let prevEnd = prevBounds.end;
     if (end < bounds.end) {
       const elapsed = Math.round((Date.parse(end) - Date.parse(start)) / 864e5);
@@ -48,12 +48,17 @@ module.exports = (r) => {
     }
     const previous = calc.summary(req.locationId, prevBounds.start, prevEnd);
 
+    // Self-check: the period total must equal the sum of its days.
+    const check = granularity === 'day' ? { ok: true, days: 1 }
+      : calc.verifyPeriodConsistency(req.locationId, start, end);
+
     res.json({
       granularity, anchor,
       current, previous,
       breakEven: be,
       benchmarks: calc.benchmarks(current),
-      trend: calc.trend(req.locationId, end > today ? today : end, 30)
+      trend: calc.trend(req.locationId, end > today ? today : end, 30),
+      consistency: check
     });
   });
 
@@ -71,8 +76,7 @@ module.exports = (r) => {
     } else {
       bounds = periodBounds(granularity, anchor);
     }
-    const clampTo = granularity === 'custom' ? todayStr() : anchor;
-    const end = bounds.end > clampTo && bounds.start <= clampTo ? clampTo : bounds.end;
+    const end = effectiveEnd(bounds);
 
     const rows = db.prepare(
       `SELECT c.id, c.name, c.commission_percent config_percent,

@@ -2,7 +2,7 @@
 const { db } = require('../db');
 const { checkLocation } = require('../auth');
 const { num } = require('../lib/parse');
-const { badDate, todayStr, periodBounds } = require('../lib/dates');
+const { badDate, todayStr, periodBounds, effectiveEnd } = require('../lib/dates');
 const calc = require('../calc');
 
 const BALANCE_PIN = process.env.BALANCE_PIN || '2374';
@@ -20,8 +20,7 @@ module.exports = (r) => {
     } else {
       bounds = periodBounds(granularity, anchor);
     }
-    const clampTo = granularity === 'custom' ? todayStr() : anchor;
-    const end = bounds.end > clampTo && bounds.start <= clampTo ? clampTo : bounds.end;
+    const end = effectiveEnd(bounds);
     const view = calc.accountsView(req.locationId, bounds.start, end);
     view.granularity = granularity; view.anchor = anchor;
     view.start = bounds.start; view.end = end; view.periodEnd = bounds.end;

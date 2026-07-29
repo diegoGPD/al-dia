@@ -14,6 +14,7 @@
 //   PIDEDIRECTO_API_BASE  — optional, default https://api.pidedirecto.mx
 const { db } = require('../db');
 const { num } = require('../lib/parse');
+const { todayStr, addDays: addDaysLib } = require('../lib/dates');
 const { upsertDayRevenue } = require('../lib/revenue');
 
 const apiKeyPresent = () => !!process.env.PIDEDIRECTO_API_KEY;
@@ -53,11 +54,12 @@ async function pdApi(method, body) {
     'Ask your account manager for the production API base URL and set PIDEDIRECTO_API_BASE.');
 }
 
-// Mexico City is UTC-6 year-round (no DST since 2022).
+// Mexico City is UTC-6 year-round (no DST since 2022); todayStr() uses the
+// same offset, so orders and period boundaries agree on what "today" means.
 const TZ_OFFSET_H = Number(process.env.TZ_OFFSET_HOURS ?? -6);
 function localDate(isoTs) {
   const t = Date.parse(isoTs);
-  if (!Number.isFinite(t)) return new Date(Date.now() + TZ_OFFSET_H * 3600e3).toISOString().slice(0, 10);
+  if (!Number.isFinite(t)) return todayStr();
   return new Date(t + TZ_OFFSET_H * 3600e3).toISOString().slice(0, 10);
 }
 

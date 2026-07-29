@@ -397,8 +397,36 @@ function benchmarks(sum) {
   });
 }
 
+// ---------- self-check ----------
+// A period total must equal the sum of its own days. This recomputes the
+// window day by day from the source rows and compares; any disagreement is a
+// bug in aggregation, so it's logged loudly and surfaced to the UI rather than
+// silently shipping wrong numbers.
+function verifyPeriodConsistency(locationId, start, end) {
+  const whole = summary(locationId, start, end);
+  let revenue = 0, costs = 0, profit = 0, days = 0;
+  for (let d = start; d <= end; d = addDays(d, 1)) {
+    const one = summary(locationId, d, d);
+    revenue += one.revenue; costs += one.costs.total; profit += one.profit;
+    if (++days > 400) break; // safety valve
+  }
+  const TOL = 0.01;
+  const diffs = {
+    revenue: whole.revenue - revenue,
+    costs: whole.costs.total - costs,
+    profit: whole.profit - profit
+  };
+  const ok = Object.values(diffs).every(v => Math.abs(v) < TOL);
+  if (!ok) {
+    console.error('[consistency] period total != sum of days',
+      { locationId, start, end, whole: whole.costs.total, sumOfDays: costs, diffs });
+  }
+  return { ok, days, diffs, period: { revenue: whole.revenue, costs: whole.costs.total, profit: whole.profit },
+           sumOfDays: { revenue, costs, profit } };
+}
+
 module.exports = {
-  summary, breakEven, trend, benchmarks,
+  summary, breakEven, trend, benchmarks, verifyPeriodConsistency,
   dailyRate, recurringForRange, accountsView,
   laborForRange, laborMaps, reconciliationAdjustment
 };

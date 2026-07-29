@@ -105,5 +105,9 @@ chk "goals" 200 "$(curl -s $C -X PUT $B/goals -d '{"location_id":1,"type":"profi
 chk "recalc" 200 "$(curl -s $C -X POST "$B/admin/recalc-commissions?location=1" -d '{"location_id":1}' -o /dev/null -w '%{http_code}')"
 chk "import" 200 "$(curl -s $C -X POST "$B/import?location=1" -d '{"location_id":1,"type":"revenue","rows":[{"date":"2026-01-02","total":"100"}]}' -o /dev/null -w '%{http_code}')"
 
+echo "== period aggregation regression =="
+node scripts/period-tests.js >/tmp/period-out.txt 2>&1 || FAIL=1
+chk "period tests" "PASS" "$(grep -q 'ALL PERIOD TESTS PASSED' /tmp/period-out.txt && echo PASS || echo FAIL)"
+
 echo
 if [ $FAIL -eq 0 ]; then echo "ALL TESTS PASSED"; else echo "FAILURES PRESENT"; exit 1; fi

@@ -82,6 +82,13 @@
 
     return `
       ${periodBar(d)}
+      ${d.consistency && d.consistency.ok === false ? `
+        <div class="status-banner bad">
+          <div class="status-title">⚠ Numbers don't add up</div>
+          <div class="status-sub">This period's total doesn't match the sum of its days
+            (off by ${money(Math.abs(d.consistency.diffs.profit))} in profit). The numbers below may be wrong —
+            this has been logged. Please report it.</div>
+        </div>` : ''}
       ${banner}
       <div class="stat-grid">
         <div class="stat-card"><div class="stat-label">Money in</div>
