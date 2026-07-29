@@ -17,12 +17,16 @@
   const toMin = t => { const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
   const toHHMM = min => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
   const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const activeOn = (e, date) =>
+    (e.start_date || '0000-01-01') <= date && (!e.end_date || e.end_date >= date);
+  let showFormer = false;
 
   registerRoute('schedule', async () => {
     schedWeek = schedWeek || mondayOf(today());
-    const [d, templates] = await Promise.all([
+    const [d, templates, roster] = await Promise.all([
       api(`/schedule?${qLoc()}&week=${schedWeek}`),
-      api(`/schedule/templates?${qLoc()}`)
+      api(`/schedule/templates?${qLoc()}`),
+      api(`/employees?${qLoc()}${showFormer ? '&former=1' : ''}`)
     ]);
     schedWeek = d.week;
     const empById = Object.fromEntries(d.employees.map(e => [e.id, e]));
@@ -48,11 +52,16 @@
               </div>
             </div>
             <div class="turn-people">
-              ${t.employee_ids.map(id => `
-                <span class="person-chip">${esc(empById[id]?.name || '?')}
-                  <button class="chip-x" data-turn="${t.id}" data-emp="${id}" aria-label="Remove">✕</button></span>`).join('')}
+              ${t.employee_ids.map(id => {
+                const e = empById[id];
+                const inactive = e && !activeOn(e, t.date);
+                return `<span class="person-chip ${inactive ? 'inactive' : ''}"
+                  ${inactive ? 'title="Not employed on this date — not counted in labor cost"' : ''}>${esc(e?.name || '?')}${inactive ? ' <span class="hint">(former)</span>' : ''}
+                  <button class="chip-x" data-turn="${t.id}" data-emp="${id}" aria-label="Remove">✕</button></span>`;
+              }).join('')}
               ${(() => {
-                const free = d.employees.filter(e => !t.employee_ids.includes(e.id));
+                // Only people employed on this date can be assigned.
+                const free = d.employees.filter(e => !t.employee_ids.includes(e.id) && activeOn(e, t.date));
                 return free.length ? `
                   <select class="add-person" data-turn="${t.id}">
                     <option value="">+ Add…</option>
@@ -108,16 +117,20 @@
       ${d.days.map((date, i) => dayBlock(date, i)).join('')}
 
       <details class="card" id="rosterBox" style="margin-top:14px">
-        <summary class="card-title">Manage employees (${d.employees.length})</summary>
-        ${d.employees.map(e => `
-          <div class="list-row" data-emp="${e.id}">
-            <div><strong>${esc(e.name)}</strong>
-              <div class="hint">${esc(e.position || '—')} · ${e.pay_type === 'salary' ? `${money(e.rate)}/week salary` : `${money2(e.rate)}/hour`}</div></div>
+        <summary class="card-title">Manage employees (${roster.filter(e => !e.former).length})</summary>
+        ${roster.map(e => `
+          <div class="list-row ${e.former ? 'former-row' : ''}" data-emp="${e.id}">
+            <div><strong>${esc(e.name)}</strong>${e.former ? ' <span class="pill warn">former</span>' : ''}
+              <div class="hint">${esc(e.position || '—')} · ${e.pay_type === 'salary' ? `${money(e.rate)}/week salary` : `${money2(e.rate)}/hour`}
+                · since ${e.start_date ? fmtDate(e.start_date, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}${
+                e.end_date ? ` until ${fmtDate(e.end_date, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}</div></div>
             <div class="list-right">
               <button class="icon-btn edit-emp" aria-label="Edit">✎</button>
               <button class="icon-btn danger del-emp" aria-label="Remove">✕</button>
             </div>
           </div>`).join('')}
+        <label class="inv-toggle big" style="margin-top:10px">
+          <input type="checkbox" id="showFormer" ${showFormer ? 'checked' : ''}>Show former employees</label>
         <form id="empForm" class="emp-form">
           <div class="row2">
             <label>Name<input name="name" required placeholder="Ana"></label>
@@ -128,6 +141,10 @@
               <select name="pay_type"><option value="hourly">Per hour</option><option value="salary">Fixed weekly salary</option></select></label>
             <label>Rate <span class="hint">($/h or $/week)</span>
               <input type="number" inputmode="decimal" step="any" min="0" name="rate" required placeholder="0"></label>
+          </div>
+          <div class="row2">
+            <label>Start date<input type="date" name="start_date" value="${today()}" required></label>
+            <label>End date <span class="hint">(leave empty if current)</span><input type="date" name="end_date"></label>
           </div>
           <button class="btn primary" type="submit">+ Add employee</button>
         </form>
@@ -201,7 +218,8 @@
       try {
         await api(`/employees?${qLoc()}`, { method: 'POST', body: {
           location_id: state.locationId, name: f.get('name'), position: f.get('position'),
-          pay_type: f.get('pay_type'), rate: Number(f.get('rate')) } });
+          pay_type: f.get('pay_type'), rate: Number(f.get('rate')),
+          start_date: f.get('start_date'), end_date: f.get('end_date') || null } });
         toast('Employee added'); rerender();
       } catch (err) { toast(err.message, true); }
     };
@@ -212,6 +230,8 @@
       toast('Removed'); rerender();
     });
     app.querySelectorAll('.edit-emp').forEach(b => b.onclick = () => empDialog(b.closest('.list-row').dataset.emp));
+    const sf = app.querySelector('#showFormer');
+    if (sf) sf.onchange = () => { showFormer = sf.checked; rerender(); };
   });
 
   // Fast turn creation: remembers your last label + times as defaults.
@@ -258,7 +278,7 @@
   }
 
   async function empDialog(id) {
-    const emps = await api(`/employees?${qLoc()}`);
+    const emps = await api(`/employees?${qLoc()}&former=1`);
     const e = emps.find(x => x.id === Number(id));
     if (!e) return;
     modal(`
@@ -274,6 +294,12 @@
             </select></label>
           <label>Rate<input type="number" inputmode="decimal" step="any" min="0" name="rate" value="${e.rate}" required></label>
         </div>
+        <div class="row2">
+          <label>Start date<input type="date" name="start_date" value="${e.start_date || ''}"></label>
+          <label>End date <span class="hint">(empty = current)</span>
+            <input type="date" name="end_date" value="${e.end_date || ''}"></label>
+        </div>
+        <p class="hint">They only count toward labor cost between these dates, whatever the schedule says.</p>
         <div class="modal-actions">
           <button type="button" class="btn" data-close>Cancel</button>
           <button type="submit" class="btn primary">Save</button>
@@ -283,10 +309,13 @@
       wrap.querySelector('#empEdit').onsubmit = async ev => {
         ev.preventDefault();
         const f = new FormData(ev.target);
-        await api(`/employees/${e.id}?${qLoc()}`, { method: 'PUT', body: {
-          location_id: state.locationId, name: f.get('name'), position: f.get('position'),
-          pay_type: f.get('pay_type'), rate: Number(f.get('rate')) } });
-        close(); toast('Saved'); render();
+        try {
+          await api(`/employees/${e.id}?${qLoc()}`, { method: 'PUT', body: {
+            location_id: state.locationId, name: f.get('name'), position: f.get('position'),
+            pay_type: f.get('pay_type'), rate: Number(f.get('rate')),
+            start_date: f.get('start_date') || undefined, end_date: f.get('end_date') || null } });
+          close(); toast('Saved'); render();
+        } catch (err) { toast(err.message, true); }
       };
     });
   }

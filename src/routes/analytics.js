@@ -57,6 +57,55 @@ module.exports = (r) => {
     });
   });
 
+  // Per-channel commission table for any period (works with custom ranges).
+  // ?channel=<id> isolates one channel; otherwise all are returned.
+  r.get('/channels', checkLocation, (req, res) => {
+    const granularity = ['day', 'week', 'month', 'custom'].includes(req.query.granularity) ? req.query.granularity : 'day';
+    const anchor = !badDate(req.query.date) ? req.query.date : todayStr();
+    let bounds;
+    if (granularity === 'custom') {
+      let s = !badDate(req.query.start) ? req.query.start : todayStr();
+      let e = !badDate(req.query.end) ? req.query.end : todayStr();
+      if (e < s) [s, e] = [e, s];
+      bounds = { start: s, end: e };
+    } else {
+      bounds = periodBounds(granularity, anchor);
+    }
+    const clampTo = granularity === 'custom' ? todayStr() : anchor;
+    const end = bounds.end > clampTo && bounds.start <= clampTo ? clampTo : bounds.end;
+
+    const rows = db.prepare(
+      `SELECT c.id, c.name, c.commission_percent config_percent,
+              COALESCE(SUM(ri.amount),0) revenue,
+              COALESCE(SUM(ri.commission_amount),0) commission,
+              COALESCE(SUM(CASE WHEN ri.commission_invoiced = 1 THEN ri.commission_amount ELSE 0 END),0) commission_invoiced,
+              COUNT(*) entries
+       FROM revenue_categories c
+       LEFT JOIN revenue_items ri ON ri.category_id = c.id
+       LEFT JOIN revenue_entries re ON re.id = ri.entry_id AND re.date BETWEEN ? AND ?
+       WHERE c.location_id = ? AND c.active = 1 AND (re.id IS NOT NULL OR ri.id IS NULL)
+       GROUP BY c.id ORDER BY c.position, c.id`)
+      .all(bounds.start, end, req.locationId)
+      .map(r => ({
+        ...r,
+        effective_percent: r.revenue > 0 ? r.commission / r.revenue * 100 : null,
+        net: r.revenue - r.commission
+      }));
+
+    const only = Number(req.query.channel) || null;
+    const channels = only ? rows.filter(r => r.id === only) : rows;
+    const totals = channels.reduce((t, r) => ({
+      revenue: t.revenue + r.revenue,
+      commission: t.commission + r.commission,
+      net: t.net + r.net
+    }), { revenue: 0, commission: 0, net: 0 });
+    res.json({
+      start: bounds.start, end, periodEnd: bounds.end, granularity,
+      channels, totals,
+      allChannels: rows.map(r => ({ id: r.id, name: r.name }))
+    });
+  });
+
   r.get('/forecast', checkLocation, (req, res) => {
     res.json({
       week: fc.forecast(req.locationId, 7),

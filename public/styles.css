@@ -279,6 +279,19 @@ strong.neg { color: var(--red); }
 .cost-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .cost-inputs select { font-size: 14px; }
 
+/* ---------- channel commission table ---------- */
+.ch-filter { margin-bottom: 10px; }
+.ch-filter select { width: 100%; margin: 0; }
+.chan-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.chan-table th { text-align: right; color: var(--muted); font-weight: 600; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+.chan-table th:first-child, .chan-table td:first-child { text-align: left; }
+.chan-table td { text-align: right; padding: 8px 4px; border-bottom: 1px solid var(--line); color: var(--ink); }
+.chan-table tfoot td { border-top: 2px solid var(--line); border-bottom: 0; }
+.chan-table .pos { color: var(--green-dark); }
+.chan-table .neg { color: var(--red); font-weight: 700; }
+.former-row { opacity: .65; }
+.person-chip.inactive { background: var(--bg); color: var(--muted); text-decoration: line-through; }
+
 /* ---------- turn-based schedule ---------- */
 .day-block {
   background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);

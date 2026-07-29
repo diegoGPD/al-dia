@@ -44,6 +44,10 @@ function recurringForRange(locationId, start, end) {
 // rates, plus salaried staff spread evenly across the week (weekly rate / 7)
 // for any week that actually has a schedule. Weeks with no shifts cost
 // nothing, so nothing appears until the scheduler is used.
+// An employee's active date range is the source of truth: a turn assignment
+// outside it costs nothing, even if the historical schedule still lists them.
+const EMP_ACTIVE_ON = `(COALESCE(e.start_date,'0000-01-01') <= %DATE% AND (e.end_date IS NULL OR e.end_date >= %DATE%))`;
+
 function laborMaps(locationId, start, end) {
   // widen to whole weeks so the "does this week have a schedule" test is right
   const wideStart = mondayOf(start), wideEnd = addDays(mondayOf(end), 6);
@@ -52,17 +56,22 @@ function laborMaps(locationId, start, end) {
      FROM turn_assignments ta
      JOIN turns t ON t.id = ta.turn_id
      JOIN employees e ON e.id = ta.employee_id AND e.pay_type = 'hourly'
-     WHERE t.location_id = ? AND t.date BETWEEN ? AND ? GROUP BY t.date`)
+     WHERE t.location_id = ? AND t.date BETWEEN ? AND ?
+       AND ${EMP_ACTIVE_ON.replace(/%DATE%/g, 't.date')}
+     GROUP BY t.date`)
     .all(locationId, wideStart, wideEnd).map(r => [r.date, r.v]));
   const scheduledWeeks = new Set(db.prepare(
     `SELECT DISTINCT t.date FROM turns t JOIN turn_assignments ta ON ta.turn_id = t.id
      WHERE t.location_id = ? AND t.date BETWEEN ? AND ?`)
     .all(locationId, wideStart, wideEnd).map(r => mondayOf(r.date)));
-  const salaryDaily = db.prepare(
-    `SELECT COALESCE(SUM(rate),0) v FROM employees WHERE location_id = ? AND active = 1 AND pay_type = 'salary'`)
-    .get(locationId).v / 7;
-  const onDay = date => (hourly[date] || 0) + (scheduledWeeks.has(mondayOf(date)) ? salaryDaily : 0);
-  return { onDay, salaryDaily, scheduledWeeks };
+  // Salaried staff cost their weekly rate only on days they're employed.
+  const salaried = db.prepare(
+    `SELECT rate, start_date, end_date FROM employees
+     WHERE location_id = ? AND active = 1 AND pay_type = 'salary'`).all(locationId);
+  const salaryOn = date => salaried.reduce((s, e) =>
+    s + (((e.start_date || '0000-01-01') <= date && (!e.end_date || e.end_date >= date)) ? e.rate / 7 : 0), 0);
+  const onDay = date => (hourly[date] || 0) + (scheduledWeeks.has(mondayOf(date)) ? salaryOn(date) : 0);
+  return { onDay, scheduledWeeks, salaryOn };
 }
 
 function laborForRange(locationId, start, end) {

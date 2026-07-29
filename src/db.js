@@ -331,6 +331,14 @@ if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='tur
   }
 }
 
+// Employment dates: an employee only costs money inside their active range.
+if (!hasColumn('employees', 'start_date')) {
+  db.exec(`ALTER TABLE employees ADD COLUMN start_date TEXT;
+           ALTER TABLE employees ADD COLUMN end_date TEXT;`);
+  // Existing staff: backdate so historical labor math is unchanged.
+  db.exec(`UPDATE employees SET start_date = '2000-01-01' WHERE start_date IS NULL`);
+}
+
 // Kitchen feed: append-only log of completed delivery-app orders (items only),
 // polled by an external local server via an integer cursor. Plus named API
 // tokens for such single-purpose integrations.

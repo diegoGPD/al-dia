@@ -7,12 +7,18 @@ const { badDate, todayStr, addDays, mondayOf } = require('../lib/dates');
 const calc = require('../calc');
 
 const turnHours = t => ((t.end_min <= t.start_min ? t.end_min + 1440 : t.end_min) - t.start_min) / 60;
+const activeOn = (e, date) =>
+  (e.start_date || '0000-01-01') <= date && (!e.end_date || e.end_date >= date);
 
 function scheduleData(locationId, weekMonday) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekMonday, i));
   const sunday = days[6];
+  // Everyone who could work any day this week, plus anyone already assigned
+  // (so historical weeks still show who was there, marked as former).
   const employees = db.prepare(
-    'SELECT * FROM employees WHERE location_id = ? AND active = 1 ORDER BY name').all(locationId);
+    `SELECT * FROM employees WHERE location_id = ? AND active = 1
+       AND COALESCE(start_date,'0000-01-01') <= ? AND (end_date IS NULL OR end_date >= ?)
+     ORDER BY name`).all(locationId, sunday, weekMonday);
   const turns = db.prepare(
     'SELECT * FROM turns WHERE location_id = ? AND date BETWEEN ? AND ? ORDER BY date, start_min, position, id')
     .all(locationId, weekMonday, sunday);
@@ -23,11 +29,23 @@ function scheduleData(locationId, weekMonday) {
     t.hours = turnHours(t);
     t.employee_ids = assignments.filter(a => a.turn_id === t.id).map(a => a.employee_id);
   }
+  // Anyone assigned but no longer employed on that week (legacy data) is still
+  // shown, flagged, and costs nothing.
+  const shownIds = new Set(employees.map(e => e.id));
+  const extraIds = [...new Set(assignments.map(a => a.employee_id))].filter(id => !shownIds.has(id));
+  if (extraIds.length) {
+    const extras = db.prepare(
+      `SELECT * FROM employees WHERE id IN (${extraIds.map(() => '?').join(',')})`).all(...extraIds);
+    extras.forEach(e => { e.former = 1; employees.push(e); });
+    employees.sort((a, b) => a.name.localeCompare(b.name));
+  }
 
   const perEmployee = employees.map(e => {
-    const own = turns.filter(t => t.employee_ids.includes(e.id));
+    // Only turns on days this person was actually employed count.
+    const own = turns.filter(t => t.employee_ids.includes(e.id) && activeOn(e, t.date));
     const hours = own.reduce((s, t) => s + t.hours, 0);
-    const cost = e.pay_type === 'salary' ? e.rate : hours * e.rate;
+    const salaryDays = days.filter(d => activeOn(e, d) && turns.some(t => t.employee_ids.length)).length;
+    const cost = e.pay_type === 'salary' ? e.rate * (salaryDays / 7) : hours * e.rate;
     return { employee_id: e.id, hours, cost, overtime: hours > 48 };
   });
   const totalCost = perEmployee.reduce((s, x) => s + x.cost, 0);
@@ -50,18 +68,25 @@ function turnOwned(locationId, id) {
 
 module.exports = (r) => {
   // ---- roster (unchanged) ----
+  // ?former=1 includes people whose end date has passed.
   r.get('/employees', checkLocation, (req, res) => {
-    res.json(db.prepare(
-      'SELECT * FROM employees WHERE location_id = ? AND active = 1 ORDER BY name').all(req.locationId));
+    const today = todayStr();
+    const rows = db.prepare(
+      `SELECT * FROM employees WHERE location_id = ? AND active = 1 ORDER BY name`).all(req.locationId);
+    const withFlag = rows.map(e => ({ ...e, former: e.end_date && e.end_date < today ? 1 : 0 }));
+    res.json(req.query.former === '1' ? withFlag : withFlag.filter(e => !e.former));
   });
 
   r.post('/employees', checkLocation, (req, res) => {
-    const { name, position, pay_type, rate } = req.body;
+    const { name, position, pay_type, rate, start_date, end_date } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'Name required' });
+    const start = !badDate(start_date) ? start_date : todayStr();
+    const end = !badDate(end_date) ? end_date : null;
+    if (end && end < start) return res.status(400).json({ error: 'End date is before the start date' });
     const { lastInsertRowid } = db.prepare(
-      'INSERT INTO employees (location_id, name, position, pay_type, rate) VALUES (?,?,?,?,?)')
+      'INSERT INTO employees (location_id, name, position, pay_type, rate, start_date, end_date) VALUES (?,?,?,?,?,?,?)')
       .run(req.locationId, String(name).trim(), (position || '').trim() || null,
-        pay_type === 'salary' ? 'salary' : 'hourly', num(rate));
+        pay_type === 'salary' ? 'salary' : 'hourly', num(rate), start, end);
     res.json({ id: Number(lastInsertRowid) });
   });
 
@@ -70,11 +95,17 @@ module.exports = (r) => {
       .get(Number(req.params.id), req.locationId);
     if (!emp) return res.status(404).json({ error: 'Not found' });
     const b = req.body;
-    db.prepare('UPDATE employees SET name=?, position=?, pay_type=?, rate=? WHERE id=?')
+    const start = b.start_date !== undefined
+      ? (!badDate(b.start_date) ? b.start_date : emp.start_date) : emp.start_date;
+    const end = b.end_date !== undefined
+      ? (b.end_date === null || b.end_date === '' ? null : (!badDate(b.end_date) ? b.end_date : emp.end_date))
+      : emp.end_date;
+    if (end && start && end < start) return res.status(400).json({ error: 'End date is before the start date' });
+    db.prepare('UPDATE employees SET name=?, position=?, pay_type=?, rate=?, start_date=?, end_date=? WHERE id=?')
       .run(b.name !== undefined ? String(b.name).trim() : emp.name,
         b.position !== undefined ? ((b.position || '').trim() || null) : emp.position,
         b.pay_type !== undefined ? (b.pay_type === 'salary' ? 'salary' : 'hourly') : emp.pay_type,
-        b.rate !== undefined ? num(b.rate) : emp.rate, emp.id);
+        b.rate !== undefined ? num(b.rate) : emp.rate, start, end, emp.id);
     res.json({ ok: true });
   });
 
@@ -129,9 +160,11 @@ module.exports = (r) => {
   r.post('/schedule/turns/:id/assign', checkLocation, (req, res) => {
     const t = turnOwned(req.locationId, req.params.id);
     if (!t) return res.status(404).json({ error: 'Not found' });
-    const emp = db.prepare('SELECT id FROM employees WHERE id = ? AND location_id = ? AND active = 1')
+    const emp = db.prepare('SELECT * FROM employees WHERE id = ? AND location_id = ? AND active = 1')
       .get(Number(req.body.employee_id), req.locationId);
     if (!emp) return res.status(404).json({ error: 'Employee not found' });
+    if (!activeOn(emp, t.date))
+      return res.status(400).json({ error: `${emp.name} wasn't employed on ${t.date}` });
     db.prepare('INSERT OR IGNORE INTO turn_assignments (turn_id, employee_id) VALUES (?,?)').run(t.id, emp.id);
     res.json({ ok: true });
   });
@@ -157,13 +190,17 @@ module.exports = (r) => {
     const insT = db.prepare(
       'INSERT INTO turns (location_id, date, label, start_min, end_min, position) VALUES (?,?,?,?,?,?)');
     const insA = db.prepare('INSERT OR IGNORE INTO turn_assignments (turn_id, employee_id) VALUES (?,?)');
-    const activeEmp = new Set(db.prepare(
-      'SELECT id FROM employees WHERE location_id = ? AND active = 1').all(req.locationId).map(e => e.id));
+    const roster = db.prepare(
+      'SELECT * FROM employees WHERE location_id = ? AND active = 1').all(req.locationId);
+    const byId = Object.fromEntries(roster.map(e => [e.id, e]));
     let copied = 0;
     for (const t of prevTurns) {
-      const newId = Number(insT.run(req.locationId, addDays(t.date, 7), t.label, t.start_min, t.end_min, t.position).lastInsertRowid);
+      const newDate = addDays(t.date, 7);
+      const newId = Number(insT.run(req.locationId, newDate, t.label, t.start_min, t.end_min, t.position).lastInsertRowid);
       const people = db.prepare('SELECT employee_id FROM turn_assignments WHERE turn_id = ?').all(t.id);
-      people.filter(p => activeEmp.has(p.employee_id)).forEach(p => insA.run(newId, p.employee_id));
+      // Skip anyone who has since left (or hasn't started) by the new date.
+      people.filter(p => byId[p.employee_id] && activeOn(byId[p.employee_id], newDate))
+        .forEach(p => insA.run(newId, p.employee_id));
       copied++;
     }
     res.json({ ok: true, copied });

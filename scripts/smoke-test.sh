@@ -54,7 +54,7 @@ curl -s $C -X POST $B/transfers -d '{"location_id":1,"date":"2026-01-05","from_a
 chk "adjust wrong PIN" 403 "$(curl -s $C -X POST $B/accounts/adjust -d '{"location_id":1,"account_id":1,"new_balance":99,"pin":"0000"}' -o /dev/null -w '%{http_code}')"
 
 echo "== team (turn-based) =="
-E=$(curl -s $C -X POST "$B/employees?location=1" -d '{"location_id":1,"name":"Ana","pay_type":"hourly","rate":65}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
+E=$(curl -s $C -X POST "$B/employees?location=1" -d '{"location_id":1,"name":"Ana","pay_type":"hourly","rate":65,"start_date":"2025-01-01"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
 TURN=$(curl -s $C -X POST "$B/schedule/turns?location=1" -d '{"location_id":1,"date":"2026-01-05","label":"Mañana","start_min":540,"end_min":1020}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
 curl -s $C -X POST "$B/schedule/turns/$TURN/assign?location=1" -d "{\"location_id\":1,\"employee_id\":$E}" >/dev/null
 S=$(curl -s $C "$B/schedule?location=1&week=2026-01-05")
@@ -70,6 +70,14 @@ echo "== custom period =="
 CP=$(curl -s $C "$B/dashboard?location=1&granularity=custom&start=2026-01-01&end=2026-01-10")
 chk "custom range respected" "2026-01-01" "$(echo "$CP" | python3 -c 'import json,sys;print(json.load(sys.stdin)["current"]["start"])')"
 chk "custom prev is preceding 10d" "2025-12-22" "$(echo "$CP" | python3 -c 'import json,sys;print(json.load(sys.stdin)["previous"]["start"])')"
+
+
+echo "== employee dates & channels =="
+EMPF=$(curl -s $C -X POST "$B/employees?location=1" -d '{"location_id":1,"name":"Gone","pay_type":"hourly","rate":100,"start_date":"2026-01-01","end_date":"2026-01-02"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
+chk "former hidden by default" 1 "$(curl -s $C "$B/employees?location=1" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')"
+chk "former shown on request" 2 "$(curl -s $C "$B/employees?location=1&former=1" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')"
+chk "assign outside range refused" 400 "$(curl -s $C -X POST "$B/schedule/turns/$TURN/assign?location=1" -d "{\"location_id\":1,\"employee_id\":$EMPF}" -o /dev/null -w '%{http_code}')"
+chk "channels endpoint" 200 "$(curl -s $C "$B/channels?location=1&granularity=custom&start=2026-01-01&end=2026-01-31" -o /dev/null -w '%{http_code}')"
 
 echo "== moves & edits =="
 chk "move revenue" 200 "$(curl -s $C -X POST $B/revenue/move -d '{"location_id":1,"from_date":"2026-01-05","to_date":"2026-01-06"}' -o /dev/null -w '%{http_code}')"

@@ -61,12 +61,9 @@
         </div>
         <div class="hint">Invoiced portion by type: day-to-day ${money(inv.variable)} · commissions ${money(inv.commissions)} · recurring ${money(inv.recurring)} · one-offs ${money(inv.oneoff)}</div>
       </div>
-      <div class="card"><div class="card-title">Commissions by channel</div>
-        ${c.costs.commissionsByChannel.length ? c.costs.commissionsByChannel.map(r => `
-          <div class="bd-row"><div class="bd-name">${esc(r.name)}<span class="hint"> · on ${money(r.amount)} sold</span></div>
-            <div class="bd-amt">${money(r.commission)}</div>
-            <div class="bd-inv hint">${r.commission > 0 ? Math.round(r.commission_invoiced / r.commission * 100) : 0}% inv.</div></div>`).join('')
-          : '<div class="hint">No commissions this period — they appear when you log sales broken down by channel.</div>'}
+      <div class="card" id="channelCard">
+        <div class="card-title">Commission by channel</div>
+        <div class="hint" id="channelBody">Loading…</div>
       </div>
       <div class="card"><div class="card-title">Day-to-day costs by category</div>${catRows(c.costs.variableByCategory, false)}</div>
       <div class="card"><div class="card-title">Recurring costs by category</div>${catRows(c.costs.recurringByCategory, true)}</div>
@@ -78,7 +75,53 @@
           : '<div class="hint">No one-off costs this period.</div>'}
       </div>`;
   });
-  registerRoute('breakdown_bind', bindPeriodBar);
+  let channelFilter = null; // null = all channels
+
+  registerRoute('breakdown_bind', (app) => {
+    bindPeriodBar(app);
+    loadChannels(app);
+  });
+
+  async function loadChannels(app) {
+    const box = app.querySelector('#channelBody');
+    if (!box) return;
+    const d = await api(`/channels?${qLoc()}&${periodQuery()}${channelFilter ? '&channel=' + channelFilter : ''}`);
+    const rows = d.channels.filter(c => c.revenue > 0 || c.id === channelFilter);
+    box.innerHTML = `
+      <div class="ch-filter">
+        <select id="chanPick">
+          <option value="">All channels</option>
+          ${d.allChannels.map(c => `<option value="${c.id}" ${channelFilter === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+        </select>
+      </div>
+      ${rows.length ? `
+      <table class="chan-table">
+        <thead><tr><th>Channel</th><th>Sold</th><th>Rate</th><th>Commission</th><th>Kept</th></tr></thead>
+        <tbody>
+          ${rows.sort((a, b) => b.commission - a.commission).map(r => `
+            <tr>
+              <td>${esc(r.name)}</td>
+              <td>${money(r.revenue)}</td>
+              <td class="${r.effective_percent >= 40 ? 'neg' : ''}">${r.effective_percent === null ? '—' : r.effective_percent.toFixed(1) + '%'}</td>
+              <td><strong>${money(r.commission)}</strong></td>
+              <td class="pos">${money(r.net)}</td>
+            </tr>`).join('')}
+        </tbody>
+        <tfoot><tr>
+          <td><strong>${channelFilter ? 'Selected' : 'All channels'}</strong></td>
+          <td><strong>${money(d.totals.revenue)}</strong></td>
+          <td>${d.totals.revenue > 0 ? (d.totals.commission / d.totals.revenue * 100).toFixed(1) + '%' : '—'}</td>
+          <td><strong>${money(d.totals.commission)}</strong></td>
+          <td class="pos"><strong>${money(d.totals.net)}</strong></td>
+        </tr></tfoot>
+      </table>
+      <div class="hint">Rate shown is what you actually paid this period (commission ÷ sold), so a channel whose rate changed mid-period reads honestly. Works with any period, including custom ranges.</div>`
+      : '<div class="hint">No sales through these channels in this period.</div>'}`;
+    box.querySelector('#chanPick').onchange = (e) => {
+      channelFilter = Number(e.target.value) || null;
+      loadChannels(app);
+    };
+  }
 
   // ======================================================================
   // Money accounts view
