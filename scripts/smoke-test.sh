@@ -85,6 +85,15 @@ chk "recon unlock" 200 "$(curl -s $C -X POST $B/reconcile/unlock -d '{"pin":"237
 chk "recon saves" 200 "$(curl -s $C -X POST "$B/reconcile?location=1" -d "{\"location_id\":1,\"category_id\":$UBER,\"start\":\"2026-01-01\",\"end\":\"2026-01-31\",\"actual_net\":6500}" -o /dev/null -w '%{http_code}')"
 chk "actual overrides estimate" 500 "$(curl -s $C "$B/dashboard?location=1&granularity=custom&start=2026-01-01&end=2026-01-31" | python3 -c 'import json,sys;print(round(json.load(sys.stdin)["current"]["costs"]["commissionAdjustment"]))')"
 
+echo "== employee removal & batch schedule =="
+DELEMP=$(curl -s $C -X POST "$B/employees?location=1" -d '{"location_id":1,"name":"Temp","pay_type":"hourly","rate":50,"start_date":"2020-01-01"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
+FUTTURN=$(curl -s $C -X POST "$B/schedule/turns?location=1" -d "{\"location_id\":1,\"date\":\"2099-01-05\",\"label\":\"F\",\"start_min\":540,\"end_min\":1020}" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
+curl -s $C -X POST "$B/schedule/assignments?location=1" -d "{\"location_id\":1,\"adds\":[{\"turn_id\":$FUTTURN,\"employee_id\":$DELEMP}],\"removes\":[]}" >/dev/null
+chk "batch assign applied" 1 "$(curl -s $C "$B/employees/$DELEMP/impact?location=1" | python3 -c 'import json,sys;print(json.load(sys.stdin)["upcomingCount"])')"
+curl -s $C -X DELETE "$B/employees/$DELEMP?location=1&mode=former&clear_upcoming=1" >/dev/null
+chk "upcoming shifts cleared" 0 "$(curl -s $C "$B/employees/$DELEMP/impact?location=1" | python3 -c 'import json,sys;print(json.load(sys.stdin)["upcomingCount"])')"
+chk "former kept in records" 1 "$(curl -s $C "$B/employees?location=1&former=1" | python3 -c 'import json,sys;print(len([e for e in json.load(sys.stdin) if e["name"]=="Temp"]))')"
+
 echo "== moves & edits =="
 chk "move revenue" 200 "$(curl -s $C -X POST $B/revenue/move -d '{"location_id":1,"from_date":"2026-01-05","to_date":"2026-01-06"}' -o /dev/null -w '%{http_code}')"
 chk "move back" 200 "$(curl -s $C -X POST $B/revenue/move -d '{"location_id":1,"from_date":"2026-01-06","to_date":"2026-01-05"}' -o /dev/null -w '%{http_code}')"

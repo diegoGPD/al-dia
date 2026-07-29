@@ -21,19 +21,73 @@
     (e.start_date || '0000-01-01') <= date && (!e.end_date || e.end_date >= date);
   let showFormer = false;
 
-  registerRoute('schedule', async () => {
-    schedWeek = schedWeek || mondayOf(today());
-    const [d, templates, roster] = await Promise.all([
-      api(`/schedule?${qLoc()}&week=${schedWeek}`),
-      api(`/schedule/templates?${qLoc()}`),
-      api(`/employees?${qLoc()}${showFormer ? '&former=1' : ''}`)
-    ]);
-    schedWeek = d.week;
-    const empById = Object.fromEntries(d.employees.map(e => [e.id, e]));
-    const perEmp = Object.fromEntries(d.perEmployee.map(p => [p.employee_id, p]));
-    const budgetPill = { over: ['bad', 'Over budget'], under: ['warn', 'Under budget'], ok: ['good', 'On budget'], na: ['', ''] }[d.budget.flag];
-    const overtime = d.employees.filter(e => perEmp[e.id]?.overtime);
+  // ---- staged (unsaved) assignment edits ----
+  // The grid is edited freely in memory; nothing is written until Save.
+  let sched = null;                 // last fetched schedule
+  let templates_ = [];              // day templates for the current location
+  const pending = new Map();        // "turnId:empId" -> 'add' | 'remove'
+  const key = (t, e) => `${t}:${e}`;
+  const isDirty = () => pending.size > 0;
 
+  function stagePerson(turnId, empId, action) {
+    const k = key(turnId, empId);
+    // adding then removing the same person cancels out
+    if (pending.get(k) && pending.get(k) !== action) pending.delete(k);
+    else pending.set(k, action);
+    const turn = sched.turns.find(t => t.id === turnId);
+    if (!turn) return;
+    if (action === 'add' && !turn.employee_ids.includes(empId)) turn.employee_ids.push(empId);
+    if (action === 'remove') turn.employee_ids = turn.employee_ids.filter(x => x !== empId);
+  }
+
+  async function savePending() {
+    if (!isDirty()) return { added: 0, removed: 0 };
+    const adds = [], removes = [];
+    for (const [k, action] of pending) {
+      const [turn_id, employee_id] = k.split(':').map(Number);
+      (action === 'add' ? adds : removes).push({ turn_id, employee_id });
+    }
+    const r = await api(`/schedule/assignments?${qLoc()}`, {
+      method: 'POST', body: { location_id: state.locationId, adds, removes } });
+    pending.clear();
+    return r;
+  }
+
+  // Don't lose staged work by navigating away or closing the tab.
+  window.addEventListener('beforeunload', (e) => {
+    if (isDirty()) { e.preventDefault(); e.returnValue = ''; }
+  });
+  let guarding = false;
+  window.addEventListener('hashchange', () => {
+    if (guarding) { guarding = false; return; }
+    if (!isDirty()) return;
+    if (confirm('You have unsaved schedule changes. Leave without saving?')) { pending.clear(); return; }
+    guarding = true;
+    location.hash = '#/schedule';
+  });
+
+  // Live totals from the in-memory grid, so staged edits show their effect
+  // before saving.
+  function liveTotals(d) {
+    const byEmp = Object.fromEntries(d.employees.map(e => [e.id, { hours: 0, cost: 0 }]));
+    for (const t of d.turns) {
+      for (const id of t.employee_ids) {
+        const e = d.employees.find(x => x.id === id);
+        if (!e || !activeOn(e, t.date)) continue;
+        byEmp[id].hours += t.hours;
+      }
+    }
+    let hours = 0, cost = 0;
+    for (const e of d.employees) {
+      const b = byEmp[e.id];
+      b.cost = e.pay_type === 'salary' ? (b.hours > 0 ? e.rate : 0) : b.hours * e.rate;
+      hours += b.hours; cost += b.cost;
+    }
+    return { hours, cost, byEmp };
+  }
+
+  function dayBlocksHtml(d, templates) {
+    const empById = Object.fromEntries(d.employees.map(e => [e.id, e]));
     const dayBlock = (date, i) => {
       const turns = d.turns.filter(t => t.date === date);
       return `
@@ -81,6 +135,23 @@
         </div>
       </details>`;
     };
+    return d.days.map((date, i) => dayBlock(date, i)).join('');
+  }
+
+  registerRoute('schedule', async () => {
+    schedWeek = schedWeek || mondayOf(today());
+    const [d, templates, roster] = await Promise.all([
+      api(`/schedule?${qLoc()}&week=${schedWeek}`),
+      api(`/schedule/templates?${qLoc()}`),
+      api(`/employees?${qLoc()}${showFormer ? '&former=1' : ''}`)
+    ]);
+    schedWeek = d.week;
+    sched = d; templates_ = templates;
+    pending.clear();
+    const empById = Object.fromEntries(d.employees.map(e => [e.id, e]));
+    const perEmp = Object.fromEntries(d.perEmployee.map(p => [p.employee_id, p]));
+    const budgetPill = { over: ['bad', 'Over budget'], under: ['warn', 'Under budget'], ok: ['good', 'On budget'], na: ['', ''] }[d.budget.flag];
+    const overtime = d.employees.filter(e => perEmp[e.id]?.overtime);
 
     return `
       <h2 class="page-title">Team schedule</h2>
@@ -93,7 +164,8 @@
 
       <div class="card">
         <div class="card-title">This week's labor cost</div>
-        <div class="be-row"><span>Scheduled (${d.totals.hours.toFixed(1)} h total)</span><strong>${money(d.totals.cost)}</strong></div>
+        <div class="be-row"><span>Scheduled (<span id="wkHours">${d.totals.hours.toFixed(1)}</span> h total)</span>
+          <strong id="wkCost">${money(d.totals.cost)}</strong></div>
         ${d.budget.amount > 0 ? `
           <div class="be-row"><span>Budgeted payroll</span><strong>${money(d.budget.amount)}</strong></div>
           <div class="be-row"><span>Difference</span>
@@ -114,7 +186,14 @@
         </div>
       </div>
 
-      ${d.days.map((date, i) => dayBlock(date, i)).join('')}
+      <div id="dayBlocks">${dayBlocksHtml(d, templates)}</div>
+      <div id="saveBar" class="save-bar" style="display:none">
+        <span id="saveCount"></span>
+        <div>
+          <button class="btn tiny" id="discardBtn">Discard</button>
+          <button class="btn primary tiny" id="saveBtn">Save changes</button>
+        </div>
+      </div>
 
       <details class="card" id="rosterBox" style="margin-top:14px">
         <summary class="card-title">Manage employees (${roster.filter(e => !e.former).length})</summary>
@@ -153,62 +232,100 @@
 
   registerRoute('schedule_bind', (app) => {
     const rerender = () => render();
-    app.querySelector('#prevWeek').onclick = () => { schedWeek = addDays(schedWeek, -7); rerender(); };
-    app.querySelector('#nextWeek').onclick = () => { schedWeek = addDays(schedWeek, 7); rerender(); };
+
+    // Re-paint just the day grid from memory — no network, no page reload.
+    function repaint() {
+      app.querySelector('#dayBlocks').innerHTML = dayBlocksHtml(sched, templates_);
+      bindGrid();
+      const totals = liveTotals(sched);
+      app.querySelector('#wkHours').textContent = totals.hours.toFixed(1);
+      app.querySelector('#wkCost').textContent = money(totals.cost);
+      const bar = app.querySelector('#saveBar');
+      bar.style.display = isDirty() ? '' : 'none';
+      app.querySelector('#saveCount').textContent =
+        `${pending.size} unsaved change${pending.size === 1 ? '' : 's'}`;
+    }
+
+    // Structural actions write immediately; flush staged edits first so
+    // nothing is lost when the grid reloads underneath them.
+    const withFlush = fn => async (...args) => {
+      if (isDirty()) {
+        if (!confirm('Save your staged changes first and continue?')) return;
+        try { await savePending(); } catch (e) { toast(e.message, true); return; }
+      }
+      return fn(...args);
+    };
+
+    function bindGrid() {
+      app.querySelectorAll('.add-turn').forEach(b => b.onclick = withFlush(() => turnDialog(b.dataset.date, null)));
+      app.querySelectorAll('.edit-turn').forEach(b => b.onclick = withFlush(() => {
+        const t = sched.turns.find(x => x.id === Number(b.dataset.turn));
+        if (t) turnDialog(t.date, t);
+      }));
+      app.querySelectorAll('.del-turn').forEach(b => b.onclick = withFlush(async () => {
+        if (!confirm('Delete this turn (and its assignments)?')) return;
+        await api(`/schedule/turns/${b.dataset.turn}?${qLoc()}`, { method: 'DELETE' });
+        toast('Turn deleted'); rerender();
+      }));
+      // staged, in-memory only
+      app.querySelectorAll('.add-person').forEach(sel => sel.onchange = () => {
+        if (!sel.value) return;
+        stagePerson(Number(sel.dataset.turn), Number(sel.value), 'add');
+        repaint();
+      });
+      app.querySelectorAll('.chip-x').forEach(x => x.onclick = () => {
+        stagePerson(Number(x.dataset.turn), Number(x.dataset.emp), 'remove');
+        repaint();
+      });
+      app.querySelectorAll('.apply-tpl').forEach(sel => sel.onchange = withFlush(async () => {
+        if (!sel.value) return;
+        if (!confirm("Replace this day's turns with the template? (People are not copied.)")) { sel.value = ''; return; }
+        await api(`/schedule/templates/${sel.value}/apply?${qLoc()}`, {
+          method: 'POST', body: { location_id: state.locationId, date: sel.dataset.date } });
+        toast('Template applied'); rerender();
+      }));
+      app.querySelectorAll('.save-tpl').forEach(b => b.onclick = async () => {
+        const name = prompt('Template name (e.g. "Weekday", "Weekend"):');
+        if (!name) return;
+        await api(`/schedule/templates?${qLoc()}`, {
+          method: 'POST', body: { location_id: state.locationId, name, date: b.dataset.date } });
+        toast('Template saved'); rerender();
+      });
+    }
+    bindGrid();
+
+    // save / discard staged edits
+    app.querySelector('#saveBtn').onclick = async () => {
+      try {
+        const r = await savePending();
+        toast(`Saved — ${r.added} added, ${r.removed} removed`);
+        rerender();
+      } catch (err) { toast(err.message, true); }
+    };
+    app.querySelector('#discardBtn').onclick = () => {
+      if (!confirm('Discard your unsaved changes?')) return;
+      pending.clear(); rerender();
+    };
+
+    const guard = fn => () => {
+      if (isDirty() && !confirm('You have unsaved schedule changes. Leave without saving?')) return;
+      pending.clear(); fn();
+    };
+    app.querySelector('#prevWeek').onclick = guard(() => { schedWeek = addDays(schedWeek, -7); rerender(); });
+    app.querySelector('#nextWeek').onclick = guard(() => { schedWeek = addDays(schedWeek, 7); rerender(); });
     const tw = app.querySelector('#thisWeek');
-    if (tw) tw.onclick = () => { schedWeek = mondayOf(today()); rerender(); };
-
-    // turns
-    app.querySelectorAll('.add-turn').forEach(b => b.onclick = () => turnDialog(b.dataset.date, null));
-    app.querySelectorAll('.edit-turn').forEach(b => b.onclick = async () => {
-      const d = await api(`/schedule?${qLoc()}&week=${schedWeek}`);
-      const t = d.turns.find(x => x.id === Number(b.dataset.turn));
-      if (t) turnDialog(t.date, t);
-    });
-    app.querySelectorAll('.del-turn').forEach(b => b.onclick = async () => {
-      if (!confirm('Delete this turn (and its assignments)?')) return;
-      await api(`/schedule/turns/${b.dataset.turn}?${qLoc()}`, { method: 'DELETE' });
-      toast('Turn deleted'); rerender();
-    });
-
-    // people in / out of turns
-    app.querySelectorAll('.add-person').forEach(sel => sel.onchange = async () => {
-      if (!sel.value) return;
-      await api(`/schedule/turns/${sel.dataset.turn}/assign?${qLoc()}`, {
-        method: 'POST', body: { location_id: state.locationId, employee_id: Number(sel.value) } });
-      rerender();
-    });
-    app.querySelectorAll('.chip-x').forEach(x => x.onclick = async () => {
-      await api(`/schedule/turns/${x.dataset.turn}/assign/${x.dataset.emp}?${qLoc()}`, { method: 'DELETE' });
-      rerender();
-    });
-
-    // templates
-    app.querySelectorAll('.apply-tpl').forEach(sel => sel.onchange = async () => {
-      if (!sel.value) return;
-      if (!confirm("Replace this day's turns with the template? (People are not copied.)")) { sel.value = ''; return; }
-      await api(`/schedule/templates/${sel.value}/apply?${qLoc()}`, {
-        method: 'POST', body: { location_id: state.locationId, date: sel.dataset.date } });
-      toast('Template applied'); rerender();
-    });
-    app.querySelectorAll('.save-tpl').forEach(b => b.onclick = async () => {
-      const name = prompt('Template name (e.g. "Weekday", "Weekend"):');
-      if (!name) return;
-      await api(`/schedule/templates?${qLoc()}`, {
-        method: 'POST', body: { location_id: state.locationId, name, date: b.dataset.date } });
-      toast('Template saved'); rerender();
-    });
+    if (tw) tw.onclick = guard(() => { schedWeek = mondayOf(today()); rerender(); });
 
     // copy last week / export
-    app.querySelector('#copyWeek').onclick = async () => {
+    app.querySelector('#copyWeek').onclick = withFlush(async () => {
       if (!confirm('Replace this week with a copy of last week (turns and people)?')) return;
       try {
         const r = await api('/schedule/copy-last-week', { method: 'POST',
           body: { location_id: state.locationId, week: schedWeek } });
         toast(`Copied ${r.copied} turns`); rerender();
       } catch (err) { toast(err.message, true); }
-    };
-    app.querySelector('#exportPng').onclick = () => exportSchedulePng();
+    });
+    app.querySelector('#exportPng').onclick = withFlush(() => exportSchedulePng());
 
     // roster
     const form = app.querySelector('#empForm');
@@ -223,12 +340,8 @@
         toast('Employee added'); rerender();
       } catch (err) { toast(err.message, true); }
     };
-    app.querySelectorAll('.del-emp').forEach(b => b.onclick = async () => {
-      const row = b.closest('.list-row');
-      if (!confirm('Remove this employee? Past schedules are kept.')) return;
-      await api(`/employees/${row.dataset.emp}?${qLoc()}`, { method: 'DELETE' });
-      toast('Removed'); rerender();
-    });
+    app.querySelectorAll('.del-emp').forEach(b => b.onclick = () =>
+      deleteEmployeeDialog(b.closest('.list-row').dataset.emp));
     app.querySelectorAll('.edit-emp').forEach(b => b.onclick = () => empDialog(b.closest('.list-row').dataset.emp));
     const sf = app.querySelector('#showFormer');
     if (sf) sf.onchange = () => { showFormer = sf.checked; rerender(); };
@@ -273,6 +386,50 @@
             JSON.stringify({ label: f.get('label'), s: f.get('start'), e: f.get('end') }));
           close(); render();
         } catch (err) { toast(err.message, true); }
+      };
+    });
+  }
+
+  // Removing someone is two decisions: keep them as history or erase them,
+  // and what to do with shifts already on the upcoming schedule.
+  async function deleteEmployeeDialog(id) {
+    const i = await api(`/employees/${id}/impact?${qLoc()}`);
+    const upcoming = i.upcomingCount;
+    modal(`
+      <h3>Remove ${esc(i.name)}</h3>
+      ${upcoming ? `
+        <div class="status-banner warn" style="padding:10px;margin-bottom:12px">
+          <div class="status-sub">They're on <strong>${upcoming}</strong> upcoming turn${upcoming > 1 ? 's' : ''}
+            (${esc(i.upcomingDates[0])}${upcoming > 1 ? ` … ${esc(i.upcomingDates[upcoming - 1])}` : ''}).</div>
+        </div>
+        <label class="inv-toggle big"><input type="checkbox" id="clearUpcoming" checked>
+          Also take them off those upcoming turns</label>`
+        : '<p class="hint">They have no upcoming turns.</p>'}
+      <div class="del-choice">
+        <button class="btn full" id="markFormer">Keep as former employee</button>
+        <p class="hint">Sets an end date. Their ${i.pastCount} past shift${i.pastCount === 1 ? '' : 's'} and labor
+          history stay exactly as they are; they just stop showing in day-to-day views.
+          Reversible — clear the end date to bring them back.</p>
+      </div>
+      <div class="del-choice danger-zone">
+        <button class="btn danger-btn full" id="purgeEmp">Delete permanently</button>
+        <p class="hint">Erases the record and <strong>every</strong> shift they ever worked, including past weeks —
+          your historical labor costs will change. This cannot be undone.</p>
+      </div>
+      <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button></div>`,
+    (wrap, close) => {
+      wrap.querySelector('[data-close]').onclick = close;
+      const clear = () => wrap.querySelector('#clearUpcoming')?.checked ? '&clear_upcoming=1' : '';
+      wrap.querySelector('#markFormer').onclick = async () => {
+        const r = await api(`/employees/${id}?${qLoc()}&mode=former${clear()}`, { method: 'DELETE' });
+        close();
+        toast(`Marked as former (until ${r.end_date})${r.cleared ? ` · removed from ${r.cleared} upcoming turns` : ''}`);
+        render();
+      };
+      wrap.querySelector('#purgeEmp').onclick = async () => {
+        if (!confirm(`Permanently delete ${i.name} and all ${i.pastCount + upcoming} of their shifts? This cannot be undone.`)) return;
+        await api(`/employees/${id}?${qLoc()}&mode=purge`, { method: 'DELETE' });
+        close(); toast('Deleted permanently'); render();
       };
     });
   }

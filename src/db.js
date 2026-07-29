@@ -460,6 +460,25 @@ function seedCategories(locationId) {
 
 db.exec(`INSERT OR IGNORE INTO loyalty_config (id) VALUES (1)`);
 
+// One-time repair (runs after every schema migration above): employees removed
+// under the old flow were archived (active = 0) with no end date, which left
+// their upcoming shifts orphaned in the schedule and still costing money. Give
+// them an end date at their last worked day (history preserved) and drop any
+// assignment from today onward.
+if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='_orphan_fix'`).get()) {
+  const today = new Date(Date.now() - 6 * 3600e3).toISOString().slice(0, 10);
+  for (const e of db.prepare(`SELECT id FROM employees WHERE active = 0 AND end_date IS NULL`).all()) {
+    const last = db.prepare(
+      `SELECT MAX(t.date) d FROM turn_assignments ta JOIN turns t ON t.id = ta.turn_id
+       WHERE ta.employee_id = ? AND t.date < ?`).get(e.id, today).d;
+    db.prepare('UPDATE employees SET end_date = ?, active = 1 WHERE id = ?').run(last || today, e.id);
+    db.prepare(
+      `DELETE FROM turn_assignments WHERE employee_id = ? AND turn_id IN
+         (SELECT id FROM turns WHERE date >= ?)`).run(e.id, today);
+  }
+  db.exec('CREATE TABLE _orphan_fix (done INTEGER)');
+}
+
 function createLocation(name) {
   const { lastInsertRowid } = db.prepare('INSERT INTO locations (name) VALUES (?)').run(name);
   const id = Number(lastInsertRowid);

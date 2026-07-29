@@ -292,6 +292,18 @@ strong.neg { color: var(--red); }
 .former-row { opacity: .65; }
 .person-chip.inactive { background: var(--bg); color: var(--muted); text-decoration: line-through; }
 
+/* ---------- unsaved-changes bar ---------- */
+.save-bar {
+  position: sticky; bottom: calc(72px + env(safe-area-inset-bottom)); z-index: 15;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--ink); color: #fff; border-radius: 12px; padding: 10px 14px;
+  margin: 12px 0; font-size: 14px; font-weight: 600; box-shadow: 0 4px 14px rgba(20,40,32,.25);
+}
+.save-bar .btn { padding: 6px 12px; }
+.del-choice { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+.del-choice .hint { margin: 6px 0 0; }
+.danger-zone .btn { border-color: var(--red); }
+
 /* ---------- turn-based schedule ---------- */
 .day-block {
   background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);

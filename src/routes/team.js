@@ -4,6 +4,7 @@ const { db } = require('../db');
 const { checkLocation } = require('../auth');
 const { num } = require('../lib/parse');
 const { badDate, todayStr, addDays, mondayOf } = require('../lib/dates');
+// (activeOn is defined below and shared by scheduling + assignment validation)
 const calc = require('../calc');
 
 const turnHours = t => ((t.end_min <= t.start_min ? t.end_min + 1440 : t.end_min) - t.start_min) / 60;
@@ -109,12 +110,54 @@ module.exports = (r) => {
     res.json({ ok: true });
   });
 
+  // What would be affected by removing this person — shown before deciding.
+  r.get('/employees/:id/impact', checkLocation, (req, res) => {
+    const emp = db.prepare('SELECT * FROM employees WHERE id = ? AND location_id = ?')
+      .get(Number(req.params.id), req.locationId);
+    if (!emp) return res.status(404).json({ error: 'Not found' });
+    const today = todayStr();
+    const upcoming = db.prepare(
+      `SELECT t.date, t.label FROM turn_assignments ta JOIN turns t ON t.id = ta.turn_id
+       WHERE ta.employee_id = ? AND t.date >= ? ORDER BY t.date`).all(emp.id, today);
+    const past = db.prepare(
+      `SELECT COUNT(*) c FROM turn_assignments ta JOIN turns t ON t.id = ta.turn_id
+       WHERE ta.employee_id = ? AND t.date < ?`).get(emp.id, today).c;
+    res.json({
+      name: emp.name, start_date: emp.start_date, end_date: emp.end_date,
+      upcomingCount: upcoming.length, upcomingDates: upcoming.map(u => u.date),
+      pastCount: past
+    });
+  });
+
+  // mode=former  -> keep the record, set an end date, history preserved
+  // mode=purge   -> delete the record and everything attached to it
+  // clear_upcoming=1 -> also strip them from turns dated today or later
   r.delete('/employees/:id', checkLocation, (req, res) => {
-    const id = Number(req.params.id);
-    const used = db.prepare('SELECT COUNT(*) c FROM turn_assignments WHERE employee_id = ?').get(id).c > 0;
-    if (used) db.prepare('UPDATE employees SET active = 0 WHERE id = ? AND location_id = ?').run(id, req.locationId);
-    else db.prepare('DELETE FROM employees WHERE id = ? AND location_id = ?').run(id, req.locationId);
-    res.json({ ok: true, archived: used });
+    const emp = db.prepare('SELECT * FROM employees WHERE id = ? AND location_id = ?')
+      .get(Number(req.params.id), req.locationId);
+    if (!emp) return res.status(404).json({ error: 'Not found' });
+    const today = todayStr();
+    const mode = req.query.mode === 'purge' ? 'purge' : 'former';
+    let cleared = 0;
+
+    // Never touch shifts before today: historical labor cost stays intact.
+    if (req.query.clear_upcoming === '1' || mode === 'purge') {
+      cleared = db.prepare(
+        `DELETE FROM turn_assignments WHERE employee_id = ? AND turn_id IN
+           (SELECT id FROM turns WHERE location_id = ? AND date >= ?)`)
+        .run(emp.id, req.locationId, today).changes;
+    }
+
+    if (mode === 'purge') {
+      // Historical assignments go too — this is the irreversible option.
+      db.prepare('DELETE FROM turn_assignments WHERE employee_id = ?').run(emp.id);
+      db.prepare('DELETE FROM employees WHERE id = ? AND location_id = ?').run(emp.id, req.locationId);
+      return res.json({ ok: true, mode, cleared, purged: true });
+    }
+
+    const endDate = !badDate(req.query.end_date) ? req.query.end_date : addDays(today, -1);
+    db.prepare('UPDATE employees SET end_date = ?, active = 1 WHERE id = ?').run(endDate, emp.id);
+    res.json({ ok: true, mode, cleared, end_date: endDate });
   });
 
   // ---- schedule ----
@@ -175,6 +218,47 @@ module.exports = (r) => {
     db.prepare('DELETE FROM turn_assignments WHERE turn_id = ? AND employee_id = ?')
       .run(t.id, Number(req.params.employeeId));
     res.json({ ok: true });
+  });
+
+  // Batch save: everything the user staged in the schedule editor, applied in
+  // one transaction so the schedule is never half-updated.
+  r.post('/schedule/assignments', checkLocation, (req, res) => {
+    const adds = Array.isArray(req.body.adds) ? req.body.adds : [];
+    const removes = Array.isArray(req.body.removes) ? req.body.removes : [];
+    const turnIds = [...new Set([...adds, ...removes].map(x => Number(x.turn_id)))];
+    if (!turnIds.length) return res.json({ ok: true, added: 0, removed: 0 });
+
+    const turns = Object.fromEntries(db.prepare(
+      `SELECT id, date FROM turns WHERE location_id = ? AND id IN (${turnIds.map(() => '?').join(',')})`)
+      .all(req.locationId, ...turnIds).map(t => [t.id, t]));
+    const emps = Object.fromEntries(db.prepare(
+      'SELECT * FROM employees WHERE location_id = ? AND active = 1').all(req.locationId).map(e => [e.id, e]));
+
+    const errors = [];
+    for (const a of adds) {
+      const t = turns[Number(a.turn_id)], e = emps[Number(a.employee_id)];
+      if (!t || !e) { errors.push('Unknown turn or employee'); continue; }
+      if (!activeOn(e, t.date)) errors.push(`${e.name} wasn't employed on ${t.date}`);
+    }
+    if (errors.length) return res.status(400).json({ error: errors[0], errors });
+
+    const insA = db.prepare('INSERT OR IGNORE INTO turn_assignments (turn_id, employee_id) VALUES (?,?)');
+    const delA = db.prepare('DELETE FROM turn_assignments WHERE turn_id = ? AND employee_id = ?');
+    let added = 0, removed = 0;
+    db.exec('BEGIN');
+    try {
+      for (const x of removes) {
+        if (turns[Number(x.turn_id)]) removed += delA.run(Number(x.turn_id), Number(x.employee_id)).changes;
+      }
+      for (const x of adds) {
+        if (turns[Number(x.turn_id)]) added += insA.run(Number(x.turn_id), Number(x.employee_id)).changes;
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      return res.status(500).json({ error: 'Could not save the schedule changes' });
+    }
+    res.json({ ok: true, added, removed });
   });
 
   // Copy last week: turns AND who's in them.
