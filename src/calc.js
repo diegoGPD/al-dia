@@ -229,6 +229,38 @@ const PLAUSIBLE_VAR_MAX = 0.75;   // day-to-day costs above 75% of sales
 const PLAUSIBLE_COMM_MAX = 0.60;  // blended commission above 60% of sales
 const MIN_SAMPLE_DAYS = 5;
 
+// Day-to-day spend for a range, counting one-offs filed under a cost category
+// (a bulk food buy) exactly like summary() does.
+function variableSpend(locationId, start, end) {
+  const vc = db.prepare(
+    `SELECT COALESCE(SUM(amount),0) t FROM variable_costs
+     WHERE location_id = ? AND date BETWEEN ? AND ?`).get(locationId, start, end).t;
+  const oo = db.prepare(
+    `SELECT COALESCE(SUM(amount),0) t FROM oneoff_costs
+     WHERE location_id = ? AND date BETWEEN ? AND ? AND category_id IS NOT NULL`)
+    .get(locationId, start, end).t;
+  return vc + oo;
+}
+
+// Break-even needs a RATE, and a rate is only meaningful over enough time.
+// Food is bought in bulk: a big Monday order against a slow week reads as 60%
+// of sales, but selling more that week would NOT have cost 60% more — the food
+// was already in the walk-in. Using that number inflates the target wildly.
+// So the day-to-day rate comes from a trailing window that smooths purchasing.
+const TYPICAL_WINDOW_DAYS = 84;
+const TYPICAL_MIN_DAYS = 21;
+
+function typicalVarRatio(locationId, end) {
+  const start = addDays(end, -(TYPICAL_WINDOW_DAYS - 1));
+  const r = db.prepare(
+    `SELECT COUNT(*) days, COALESCE(SUM(total),0) rev FROM revenue_entries
+     WHERE location_id = ? AND date BETWEEN ? AND ? AND total > 0`).get(locationId, start, end);
+  if (r.days < TYPICAL_MIN_DAYS || r.rev <= 0) return null;
+  const ratio = variableSpend(locationId, start, end) / r.rev;
+  if (ratio <= 0 || ratio > PLAUSIBLE_VAR_MAX) return null;
+  return { ratio, days: r.days, from: start, to: end };
+}
+
 function recentScalingRatios(locationId, before) {
   const start = addDays(before, -89); // look back up to 90 days for a real sample
   const rows = db.prepare(
@@ -258,9 +290,17 @@ function breakEven(locationId, start, end, sum) {
   const recent = recentScalingRatios(locationId, addDays(start, -1));
   let sources = 0; // how many components come from this period's actual data
 
+  // Rate first, this period second: bulk purchases make a single period's
+  // ratio meaningless as a marginal cost rate.
+  const typical = typicalVarRatio(locationId, end);
+  const periodVarRatio = sum.revenue > 0 && sum.costs.variable > 0
+    ? sum.costs.variable / sum.revenue : null;
+
   let varRatio, varSource;
-  if (sum.revenue > 0 && sum.costs.variable > 0) {
-    varRatio = sum.costs.variable / sum.revenue; varSource = 'actual'; sources++;
+  if (typical) {
+    varRatio = typical.ratio; varSource = 'typical'; sources++;
+  } else if (periodVarRatio !== null) {
+    varRatio = periodVarRatio; varSource = 'actual'; sources++;
   } else if (recent.varRatio !== null) {
     varRatio = recent.varRatio; varSource = 'history';
   } else {
@@ -284,7 +324,14 @@ function breakEven(locationId, start, end, sum) {
 
   const ratio = varRatio + commRatio;
   const ratioSource = sources === 2 ? 'actual' : sources === 1 ? 'mixed' : 'estimated';
-  const base = { ratio, varRatio, commRatio, varSource, commSource, ratioSource, fixed };
+  const base = {
+    ratio, varRatio, commRatio, varSource, commSource, ratioSource, fixed,
+    // What this period alone spent, so the UI can explain a lumpy week
+    // without letting it distort the target.
+    periodVarRatio,
+    typicalWindowDays: typical ? typical.days : null,
+    lumpy: typical && periodVarRatio !== null && Math.abs(periodVarRatio - typical.ratio) > 0.08
+  };
 
   // If costs would eat 90%+ of every sale, break-even is either unreachable or
   // (far more likely) the inputs are wrong. Say so instead of printing a

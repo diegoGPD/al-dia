@@ -69,9 +69,16 @@
           grossed-up to already cover your fixed costs of ${money(be.fixed)} plus the ${pct(be.ratio)} of every
           sale that leaves as day-to-day costs (${pct(be.varRatio)}) and channel commissions
           (${pct(be.commRatio)} — your per-channel rates weighted by the actual channel mix).
-          ${be.varSource === 'actual' ? '' :
-            be.varSource === 'history' ? 'Day-to-day costs estimated from your recent history (none logged in this period yet).'
+          ${be.varSource === 'typical'
+            ? `The day-to-day rate is your <strong>typical</strong> one across ${be.typicalWindowDays} days of sales, not just this period — food bought in bulk would otherwise make one week look far more expensive per peso than it really is.`
+            : be.varSource === 'actual' ? 'Day-to-day rate taken from this period.'
+            : be.varSource === 'history' ? 'Day-to-day costs estimated from your recent history (none logged in this period yet).'
             : 'Day-to-day costs estimated from your category defaults — log some to sharpen this.'}</div>
+        ${be.lumpy ? `
+        <div class="hint" style="margin-top:6px">📦 This period's day-to-day spend was ${pct(be.periodVarRatio)} of its sales
+          — ${be.periodVarRatio > be.varRatio ? 'above' : 'below'} your usual ${pct(be.varRatio)}, which just means you
+          ${be.periodVarRatio > be.varRatio ? 'stocked up' : 'ran down stock'} in this window. It affects your real
+          profit above, but not the sales target, since already-bought stock doesn't cost more to sell.</div>` : ''}
       </div>` : '';
 
     const bmCard = d.benchmarks.length ? `
