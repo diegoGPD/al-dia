@@ -81,7 +81,9 @@
           const flagText = { high: 'Above typical', low: 'Below typical', great: 'Above typical', low_note: 'Below typical', ok: 'In range' }[b.flag];
           const flagCls = { high: 'bad', low: 'bad', great: 'good', low_note: 'warn', ok: 'good' }[b.flag];
           return `<div class="bm-row">
-            <div class="bm-name">${b.label}<span class="hint"> · typical ${(b.low * 100).toFixed(0)}–${(b.high * 100).toFixed(0)}%</span></div>
+            <div class="bm-name">${b.label}<span class="hint"> · typical ${(b.low * 100).toFixed(0)}–${(b.high * 100).toFixed(0)}%</span>
+              ${b.parts ? `<div class="bm-parts">${b.parts.map(p =>
+                `<span>${p.label} <strong>${pct(p.value)}</strong> <span class="hint">(${money(p.amount)})</span></span>`).join('')}</div>` : ''}</div>
             <div class="bm-val"><strong>${pct(b.value)}</strong> <span class="pill ${flagCls}">${flagText}</span></div>
           </div>`;
         }).join('')}

@@ -351,6 +351,38 @@ if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='cha
   `);
 }
 
+// Packaging deserves its own benchmark line (delivery-heavy kitchens spend
+// real money on it), so the tag list gains 'packaging'. SQLite can't alter a
+// CHECK constraint in place — rebuild the table, preserving every row.
+if (!db.prepare(`SELECT 1 x FROM pragma_table_info('variable_cost_categories') WHERE name = 'benchmark_tag'`).get()
+    || !/packaging/.test(db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='variable_cost_categories'`).get()?.sql || '')) {
+  db.exec('PRAGMA foreign_keys = OFF;');
+  db.exec(`
+    CREATE TABLE variable_cost_categories_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      entry_mode TEXT NOT NULL DEFAULT 'fixed' CHECK (entry_mode IN ('fixed','percent')),
+      default_percent REAL,
+      default_invoiced INTEGER NOT NULL DEFAULT 0,
+      benchmark_tag TEXT CHECK (benchmark_tag IN ('food','labor','packaging') OR benchmark_tag IS NULL),
+      position INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1
+    );
+    INSERT INTO variable_cost_categories_new
+      SELECT id, location_id, name, entry_mode, default_percent, default_invoiced, benchmark_tag, position, active
+      FROM variable_cost_categories;
+    DROP TABLE variable_cost_categories;
+    ALTER TABLE variable_cost_categories_new RENAME TO variable_cost_categories;
+  `);
+  // Tag existing packaging categories so the new benchmark works right away.
+  db.prepare(`UPDATE variable_cost_categories SET benchmark_tag = 'packaging'
+    WHERE benchmark_tag IS NULL AND (lower(name) LIKE '%packaging%' OR lower(name) LIKE '%empaque%'
+      OR lower(name) LIKE '%to-go%' OR lower(name) LIKE '%desechable%')`).run();
+  db.exec('PRAGMA foreign_keys = ON;');
+}
+
 // One-off costs can name a cost category (e.g. a bulk food purchase), so they
 // land in the right bucket for benchmarks and the day-to-day cost rate instead
 // of being lumped in as "unusual".
@@ -431,7 +463,7 @@ const DEFAULTS = {
   ],
   variable: [
     { name: 'Food & drink ingredients', entry_mode: 'percent', default_percent: 30, default_invoiced: 1, benchmark_tag: 'food' },
-    { name: 'Packaging & to-go supplies', entry_mode: 'percent', default_percent: 2, default_invoiced: 1, benchmark_tag: null },
+    { name: 'Packaging & to-go supplies', entry_mode: 'percent', default_percent: 2, default_invoiced: 1, benchmark_tag: 'packaging' },
     { name: 'Extra staff / overtime', entry_mode: 'fixed', default_percent: null, default_invoiced: 0, benchmark_tag: 'labor' }
   ],
   accounts: ['Cash', 'Bank 1', 'Bank 2', 'Delivery apps'],

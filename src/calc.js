@@ -177,8 +177,9 @@ function summary(locationId, start, end) {
   // Scheduled labor counts as not-invoiced spend.
   const invoicedTotal = variableInvoiced + commissionsInvoiced + oneoffInvoiced + rec.invoiced;
 
-  // Benchmark tag totals (food/labor from variable; labor/occupancy from recurring; scheduled team = labor)
-  const tag = { food: 0, labor: labor, occupancy: 0 };
+  // Benchmark tag totals (food/packaging/labor from day-to-day; labor/occupancy
+  // from recurring; scheduled team counts as labor)
+  const tag = { food: 0, packaging: 0, labor: labor, occupancy: 0 };
   for (const r of varRows) if (r.benchmark_tag) tag[r.benchmark_tag] += r.amount;
   for (const [t, amt] of Object.entries(rec.byTag)) tag[t] += amt;
 
@@ -451,9 +452,11 @@ function accountsView(locationId, start, end) {
 
 // ---------- general industry benchmarks (typical full-service/quick-service ranges) ----------
 const BENCHMARKS = [
-  { key: 'food',      label: 'Food & drink cost', low: 0.28, high: 0.35 },
+  // Cost of goods = food + packaging; the split is carried in `parts` so the
+  // card can show both the number to judge and what makes it up.
+  { key: 'cogs',      label: 'Cost of goods (food + packaging)', low: 0.30, high: 0.38 },
   { key: 'labor',     label: 'Labor cost',        low: 0.25, high: 0.35 },
-  { key: 'prime',     label: 'Prime cost (food + labor)', low: 0.55, high: 0.65 },
+  { key: 'prime',     label: 'Prime cost (goods + labor)', low: 0.55, high: 0.65 },
   { key: 'occupancy', label: 'Rent & occupancy',  low: 0.05, high: 0.10 },
   { key: 'net',       label: 'Net profit margin', low: 0.03, high: 0.09 }
 ];
@@ -462,13 +465,19 @@ function benchmarks(sum) {
   if (sum.revenue <= 0) return [];
   const pct = {
     food: sum.tagTotals.food / sum.revenue,
+    packaging: (sum.tagTotals.packaging || 0) / sum.revenue,
     labor: sum.tagTotals.labor / sum.revenue,
     occupancy: sum.tagTotals.occupancy / sum.revenue,
     net: sum.netMargin
   };
-  pct.prime = pct.food + pct.labor;
+  pct.cogs = pct.food + pct.packaging;
+  pct.prime = pct.cogs + pct.labor;
   return BENCHMARKS.map(b => {
     const value = pct[b.key];
+    const parts = b.key === 'cogs'
+      ? [{ label: 'Food & drink', value: pct.food, amount: sum.tagTotals.food },
+         { label: 'Packaging & supplies', value: pct.packaging, amount: sum.tagTotals.packaging || 0 }]
+      : null;
     let flag = 'ok';
     if (b.key === 'net') {
       if (value < b.low) flag = 'low';           // for net margin, low is bad
@@ -477,7 +486,7 @@ function benchmarks(sum) {
       if (value > b.high) flag = 'high';         // for costs, high is bad
       else if (value < b.low) flag = 'low_note'; // unusually low — worth a look
     }
-    return { ...b, value, flag };
+    return { ...b, value, flag, parts };
   });
 }
 

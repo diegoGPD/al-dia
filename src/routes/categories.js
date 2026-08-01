@@ -37,7 +37,7 @@ module.exports = (r) => {
         .run(req.locationId, name, mode,
           mode === 'percent' ? num(req.body.default_percent) : null,
           bool01(req.body.default_invoiced),
-          ['food', 'labor'].includes(req.body.benchmark_tag) ? req.body.benchmark_tag : null, pos);
+          ['food', 'packaging', 'labor'].includes(req.body.benchmark_tag) ? req.body.benchmark_tag : null, pos);
     } else if (req.params.group === 'recurring') {
       result = db.prepare(
         `INSERT INTO recurring_cost_categories (location_id, name, benchmark_tag, position) VALUES (?,?,?,?)`)
@@ -74,7 +74,7 @@ module.exports = (r) => {
             : null,
           req.body.default_invoiced !== undefined ? bool01(req.body.default_invoiced) : cat.default_invoiced,
           req.body.benchmark_tag !== undefined
-            ? (['food', 'labor'].includes(req.body.benchmark_tag) ? req.body.benchmark_tag : null)
+            ? (['food', 'packaging', 'labor'].includes(req.body.benchmark_tag) ? req.body.benchmark_tag : null)
             : cat.benchmark_tag,
           id);
     } else if (req.params.group === 'recurring') {

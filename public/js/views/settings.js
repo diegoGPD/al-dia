@@ -550,7 +550,9 @@
       <label class="inv-toggle big"><input type="checkbox" name="default_invoiced">Usually invoiced</label>
       <label>Counts as (for benchmarks)
         <select name="benchmark_tag"><option value="">Nothing special</option>
-          <option value="food">Food & drink cost</option><option value="labor">Labor</option></select></label>`
+          <option value="food">Food & drink cost</option>
+          <option value="packaging">Packaging & supplies</option>
+          <option value="labor">Labor</option></select></label>`
       : group === 'recurring' ? `
       <label>Counts as (for benchmarks)
         <select name="benchmark_tag"><option value="">Nothing special</option>
