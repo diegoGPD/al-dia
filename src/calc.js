@@ -285,68 +285,56 @@ function recentScalingRatios(locationId, before) {
   };
 }
 
+// Break-even = the sales level that would have covered the money you ACTUALLY
+// spent in this period. Nothing is modelled as a percentage of sales except
+// channel commissions, which genuinely are deducted per order — food, labour
+// and rent are counted exactly as logged, never projected as a rate.
+//
+//   S = (everything spent except commissions) / (1 - commission rate)
+//
+// By construction this can never contradict the profit figure: above the line
+// means you kept money, below means you didn't.
 function breakEven(locationId, start, end, sum) {
   const fixed = sum.costs.recurring + sum.costs.oneoff + sum.costs.labor;
-  const recent = recentScalingRatios(locationId, addDays(start, -1));
-  let sources = 0; // how many components come from this period's actual data
+  const spentExCommissions = sum.costs.total - sum.costs.commissions;
 
-  // Rate first, this period second: bulk purchases make a single period's
-  // ratio meaningless as a marginal cost rate.
-  const typical = typicalVarRatio(locationId, end);
-  const periodVarRatio = sum.revenue > 0 && sum.costs.variable > 0
-    ? sum.costs.variable / sum.revenue : null;
-
-  let varRatio, varSource;
-  if (typical) {
-    varRatio = typical.ratio; varSource = 'typical'; sources++;
-  } else if (periodVarRatio !== null) {
-    varRatio = periodVarRatio; varSource = 'actual'; sources++;
-  } else if (recent.varRatio !== null) {
-    varRatio = recent.varRatio; varSource = 'history';
-  } else {
-    varRatio = Math.min(db.prepare(
-      `SELECT COALESCE(SUM(default_percent),0) p FROM variable_cost_categories
-       WHERE location_id = ? AND active = 1 AND entry_mode = 'percent'`).get(locationId).p / 100, PLAUSIBLE_VAR_MAX);
-    varSource = 'defaults';
-  }
-
+  // Commission rate: what this period's orders actually paid; only estimated
+  // when there are no sales at all to measure.
   let commRatio, commSource;
-  if (sum.revenue > 0 && sum.costs.commissions > 0) {
-    commRatio = sum.costs.commissions / sum.revenue; commSource = 'actual'; sources++;
-  } else if (recent.commRatio !== null) {
-    commRatio = recent.commRatio; commSource = 'history';
+  if (sum.revenue > 0) {
+    commRatio = sum.costs.commissions / sum.revenue; commSource = 'actual';
   } else {
-    commRatio = Math.min(db.prepare(
-      `SELECT COALESCE(AVG(commission_percent),0) p FROM revenue_categories
-       WHERE location_id = ? AND active = 1`).get(locationId).p / 100, PLAUSIBLE_COMM_MAX);
-    commSource = 'defaults';
+    const recent = recentScalingRatios(locationId, addDays(start, -1));
+    if (recent.commRatio !== null) { commRatio = recent.commRatio; commSource = 'history'; }
+    else {
+      commRatio = Math.min(db.prepare(
+        `SELECT COALESCE(AVG(commission_percent),0) p FROM revenue_categories
+         WHERE location_id = ? AND active = 1`).get(locationId).p / 100, PLAUSIBLE_COMM_MAX);
+      commSource = 'defaults';
+    }
   }
 
-  const ratio = varRatio + commRatio;
-  const ratioSource = sources === 2 ? 'actual' : sources === 1 ? 'mixed' : 'estimated';
   const base = {
-    ratio, varRatio, commRatio, varSource, commSource, ratioSource, fixed,
-    // What this period alone spent, so the UI can explain a lumpy week
-    // without letting it distort the target.
-    periodVarRatio,
-    typicalWindowDays: typical ? typical.days : null,
-    lumpy: typical && periodVarRatio !== null && Math.abs(periodVarRatio - typical.ratio) > 0.08
+    commRatio, commSource, fixed, spentExCommissions,
+    dayToDay: sum.costs.variable,
+    // kept for the UI: what this period's day-to-day spend was as a share of
+    // its sales, shown as information only — it does not drive the target.
+    periodVarRatio: sum.revenue > 0 ? sum.costs.variable / sum.revenue : null,
+    ratio: commRatio, varRatio: 0, ratioSource: commSource, varSource: 'actual'
   };
 
-  // If costs would eat 90%+ of every sale, break-even is either unreachable or
-  // (far more likely) the inputs are wrong. Say so instead of printing a
-  // number that looks authoritative and is off by an order of magnitude.
-  if (ratio >= 0.90) {
-    const guess = varSource !== 'actual'
-      ? "this period has no day-to-day costs logged yet, so the rate had to be estimated"
-      : "day-to-day costs plus commissions are eating almost every peso of sales";
-    return { ...base, salesNeeded: null, gap: null, status: 'ratio_implausible', reason: guess };
+  if (commRatio >= 0.95) {
+    return { ...base, salesNeeded: null, gap: null, status: 'ratio_implausible',
+      reason: 'commissions are taking nearly every peso of each sale' };
   }
-  const salesNeeded = fixed / (1 - ratio);
+  if (spentExCommissions <= 0 && sum.revenue === 0) {
+    return { ...base, salesNeeded: 0, gap: 0, status: 'no_data' };
+  }
+
+  const salesNeeded = spentExCommissions / (1 - commRatio);
   const gap = sum.revenue - salesNeeded;
   let status;
-  if (salesNeeded === 0 && sum.revenue === 0) status = 'no_data';
-  else if (Math.abs(gap) <= salesNeeded * 0.02) status = 'at';
+  if (Math.abs(gap) <= Math.max(salesNeeded * 0.02, 1)) status = 'at';
   else status = gap > 0 ? 'above' : 'below';
   return { ...base, salesNeeded, gap, status };
 }

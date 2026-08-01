@@ -43,7 +43,8 @@ curl -s $C -X POST $B/oneoff -d '{"location_id":1,"date":"2026-01-05","descripti
 D=$(curl -s $C "$B/dashboard?location=1&granularity=day&date=2026-01-05")
 # profit = 15000 - 4500 - 3000 - 120(rent daily) - 500 = 6880
 chk "day profit" 6880 "$(echo "$D" | python3 -c 'import json,sys;print(round(json.load(sys.stdin)["current"]["profit"]))')"
-chk "BE includes commissions" 0.5 "$(echo "$D" | python3 -c 'import json,sys;b=json.load(sys.stdin)["breakEven"];print(round(b["varRatio"]+b["commRatio"],1))')"
+chk "BE rate is commissions only" 0.2 "$(echo "$D" | python3 -c 'import json,sys;b=json.load(sys.stdin)["breakEven"];print(round(b["commRatio"],1))')"
+chk "BE agrees with profit" "True" "$(echo "$D" | python3 -c 'import json,sys;d=json.load(sys.stdin);print((d["current"]["profit"]>0)==(d["breakEven"]["status"]=="above"))')"
 chk "invoiced split" 7620 "$(echo "$D" | python3 -c 'import json,sys;print(round(json.load(sys.stdin)["current"]["invoiced"]["total"]))')"
 
 echo "== accounts =="
