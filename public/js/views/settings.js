@@ -192,6 +192,12 @@
           `Opening balance: ${money(c.opening_balance || 0)}`)}
         <div class="hint">Categories with history are archived instead of deleted, so old numbers stay right.</div>
         <div style="margin-top:12px">
+          <button class="btn tiny" id="classifyOneoffs">🏷 Classify old one-off costs by their title</button>
+          <div class="hint">Finds one-offs saved as "Food &amp; drink ingredients — Champis Fresco", files them under
+            that cost category and trims the prefix from the description. Shows you the list before changing anything.</div>
+          <div id="classifyResult"></div>
+        </div>
+        <div style="margin-top:12px">
           <button class="btn tiny" id="recalcComm">↻ Recalculate past commissions with today's rates</button>
           <div class="hint">Rewrites every logged day's commissions using each channel's current % and invoiced setting. Use after fixing rates that were wrong from the start.</div>
         </div>
@@ -391,6 +397,38 @@
         });
       });
     }
+
+    // classify legacy one-off costs by their title
+    app.querySelector('#classifyOneoffs').onclick = async () => {
+      const box = app.querySelector('#classifyResult');
+      box.innerHTML = '<div class="hint">Looking…</div>';
+      const { matches } = await api(`/admin/classify-oneoffs?${qLoc()}`);
+      if (!matches.length) {
+        box.innerHTML = '<div class="hint">Nothing to classify — no one-off costs start with a category name.</div>';
+        return;
+      }
+      const total = matches.reduce((s, m) => s + m.amount, 0);
+      box.innerHTML = `
+        <div class="card" style="margin-top:8px">
+          <div class="card-title">${matches.length} cost${matches.length === 1 ? '' : 's'} · ${money(total)} would be reclassified</div>
+          ${matches.slice(0, 40).map(m => `
+            <div class="bd-row"><div class="bd-name">${esc(m.from)}
+              <span class="hint">→ ${esc(m.category_name)} · "${esc(m.to)}"</span></div>
+              <div class="bd-amt">${money(m.amount)}</div>
+              <div class="bd-inv hint">${esc(m.date)}</div></div>`).join('')}
+          ${matches.length > 40 ? `<div class="hint">…and ${matches.length - 40} more</div>` : ''}
+          <button class="btn primary full" id="classifyApply" style="margin-top:10px">Apply to all ${matches.length}</button>
+        </div>`;
+      box.querySelector('#classifyApply').onclick = async () => {
+        const r = await api(`/admin/classify-oneoffs?${qLoc()}`, { method: 'POST' });
+        const summary = Object.entries(r.byCategory)
+          .map(([n, v]) => `${n}: ${v.count} (${money(v.amount)})`).join(' · ');
+        toast(`Classified ${r.updated} costs`);
+        box.innerHTML = `<div class="status-banner good" style="padding:10px;margin-top:8px">
+          <div class="status-sub">✓ ${r.updated} costs reclassified — ${esc(summary)}.
+          They now count toward those categories in your cost breakdown, break-even rate and benchmarks.</div></div>`;
+      };
+    };
 
     // recalc past commissions with current rates
     app.querySelector('#recalcComm').onclick = async () => {

@@ -87,6 +87,16 @@ module.exports = (r) => {
     res.json({ ok: true });
   });
 
+  // ---- maintenance: classify legacy "Category — note" one-off costs ----
+  r.get('/admin/classify-oneoffs', requireOwner, checkLocation, (req, res) => {
+    res.json({ matches: require('../lib/classify-oneoffs').plan(req.locationId) });
+  });
+
+  r.post('/admin/classify-oneoffs', requireOwner, checkLocation, (req, res) => {
+    try { res.json(require('../lib/classify-oneoffs').apply(req.locationId)); }
+    catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // ---- maintenance: recompute stored commissions with current channel rates ----
   r.post('/admin/recalc-commissions', requireOwner, checkLocation, (req, res) => {
     const cats = Object.fromEntries(db.prepare(
