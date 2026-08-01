@@ -18,6 +18,12 @@
     if (!hasData) {
       banner = `<div class="status-banner neutral"><div class="status-title">No data yet for this period</div>
         <div class="status-sub">Log your sales and costs to see how you're doing.</div></div>`;
+    } else if (be.status === 'ratio_implausible') {
+      banner = `<div class="status-banner warn"><div class="status-title">Break-even can't be calculated yet</div>
+        <div class="status-sub">${esc(be.reason || '')} — ${c.profit >= 0
+          ? `you're currently keeping ${money(c.profit)} this period.`
+          : `you're currently down ${money(-c.profit)} this period.`}
+          Log this period's food and supply costs (or categorize your one-off costs) and it'll compute properly.</div></div>`;
     } else if (be.status === 'above') {
       banner = `<div class="status-banner good"><div class="status-title">✓ Profitable</div>
         <div class="status-sub">You're ${money(be.gap)} above your break-even point.</div></div>`;
@@ -60,10 +66,10 @@
         <div class="hint">Both figures are <strong>gross sales</strong> (what your POS reports); the target is
           grossed-up to already cover your fixed costs of ${money(be.fixed)} plus the ${pct(be.ratio)} of every
           sale that leaves as day-to-day costs (${pct(be.varRatio)}) and channel commissions
-          (${pct(be.commRatio)} — your per-channel rates weighted by the actual channel mix)${
-          be.ratioSource === 'actual' ? '' : be.ratioSource === 'mixed'
-            ? '. Partly from recent history until this period has all its costs logged'
-            : '. Estimated from recent history and channel settings for now'}.</div>
+          (${pct(be.commRatio)} — your per-channel rates weighted by the actual channel mix).
+          ${be.varSource === 'actual' ? '' :
+            be.varSource === 'history' ? 'Day-to-day costs estimated from your recent history (none logged in this period yet).'
+            : 'Day-to-day costs estimated from your category defaults — log some to sharpen this.'}</div>
       </div>` : '';
 
     const bmCard = d.benchmarks.length ? `

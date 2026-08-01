@@ -208,10 +208,15 @@ function pagesRouter() {
     const description = note && category !== 'Otro gasto' ? `${category} — ${note}`
       : note ? note : category;
 
+    // The chip they tapped is a real cost category — record it, so a food
+    // purchase logged here counts as food, not as an unclassified one-off.
+    const cat = db.prepare(
+      `SELECT id FROM variable_cost_categories WHERE location_id = ? AND active = 1 AND lower(name) = lower(?)`)
+      .get(locId, category);
     const { lastInsertRowid } = db.prepare(
-      `INSERT INTO oneoff_costs (location_id, date, description, amount, invoiced, logged_by)
-       VALUES (?,?,?,?,?,?)`)
-      .run(locId, date, description, amount, bool01(b.invoiced), link.name);
+      `INSERT INTO oneoff_costs (location_id, date, description, amount, invoiced, logged_by, category_id)
+       VALUES (?,?,?,?,?,?,?)`)
+      .run(locId, date, description, amount, bool01(b.invoiced), link.name, cat ? cat.id : null);
 
     if (b.receipt_base64 && typeof b.receipt_base64 === 'string' && b.receipt_base64.length < 8.5e6) {
       try {

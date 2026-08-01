@@ -161,18 +161,21 @@ module.exports = (r) => {
     const { start, end } = req.query;
     if (badDate(start) || badDate(end)) return res.status(400).json({ error: 'Invalid range' });
     res.json(db.prepare(
-      `SELECT * FROM oneoff_costs WHERE location_id = ? AND date BETWEEN ? AND ? ORDER BY date DESC, id DESC`)
+      `SELECT o.*, c.name category_name FROM oneoff_costs o
+       LEFT JOIN variable_cost_categories c ON c.id = o.category_id
+       WHERE o.location_id = ? AND o.date BETWEEN ? AND ? ORDER BY o.date DESC, o.id DESC`)
       .all(req.locationId, start, end));
   });
 
   r.post('/oneoff', checkLocation, (req, res) => {
-    const { date, description, amount, invoiced, account_id } = req.body;
+    const { date, description, amount, invoiced, account_id, category_id } = req.body;
     if (badDate(date) || !description || num(amount) <= 0)
       return res.status(400).json({ error: 'Date, description and amount are required' });
     const { lastInsertRowid } = db.prepare(
-      'INSERT INTO oneoff_costs (location_id, date, description, amount, invoiced, account_id) VALUES (?,?,?,?,?,?)')
+      `INSERT INTO oneoff_costs (location_id, date, description, amount, invoiced, account_id, category_id)
+       VALUES (?,?,?,?,?,?,?)`)
       .run(req.locationId, date, description.trim(), num(amount), bool01(invoiced),
-        account_id ? Number(account_id) : null);
+        account_id ? Number(account_id) : null, category_id ? Number(category_id) : null);
     res.json({ id: Number(lastInsertRowid) });
   });
 
@@ -181,12 +184,14 @@ module.exports = (r) => {
       .get(Number(req.params.id), req.locationId);
     if (!it) return res.status(404).json({ error: 'Not found' });
     const b = req.body;
-    db.prepare('UPDATE oneoff_costs SET date=?, description=?, amount=?, invoiced=?, account_id=? WHERE id=?')
+    db.prepare(`UPDATE oneoff_costs SET date=?, description=?, amount=?, invoiced=?, account_id=?, category_id=?
+      WHERE id=?`)
       .run(!badDate(b.date) ? b.date : it.date,
         b.description !== undefined ? String(b.description).trim() : it.description,
         b.amount !== undefined ? num(b.amount) : it.amount,
         b.invoiced !== undefined ? bool01(b.invoiced) : it.invoiced,
         b.account_id !== undefined ? (b.account_id ? Number(b.account_id) : null) : it.account_id,
+        b.category_id !== undefined ? (b.category_id ? Number(b.category_id) : null) : it.category_id,
         it.id);
     res.json({ ok: true });
   });

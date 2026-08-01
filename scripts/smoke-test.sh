@@ -94,6 +94,13 @@ curl -s $C -X DELETE "$B/employees/$DELEMP?location=1&mode=former&clear_upcoming
 chk "upcoming shifts cleared" 0 "$(curl -s $C "$B/employees/$DELEMP/impact?location=1" | python3 -c 'import json,sys;print(json.load(sys.stdin)["upcomingCount"])')"
 chk "former kept in records" 1 "$(curl -s $C "$B/employees?location=1&former=1" | python3 -c 'import json,sys;print(len([e for e in json.load(sys.stdin) if e["name"]=="Temp"]))')"
 
+echo "== break-even sanity & one-off categories =="
+curl -s $C -X POST $B/oneoff -d "{\"location_id\":1,\"date\":\"2026-01-05\",\"description\":\"Compra abarrotes\",\"amount\":1000,\"invoiced\":true,\"category_id\":$FOOD}" >/dev/null
+DF=$(curl -s $C "$B/dashboard?location=1&granularity=day&date=2026-01-05")
+chk "categorized one-off joins day-to-day" 5500 "$(echo "$DF" | python3 -c 'import json,sys;print(round(json.load(sys.stdin)["current"]["costs"]["variable"]))')"
+chk "break-even stays plausible" "True" "$(echo "$DF" | python3 -c 'import json,sys;b=json.load(sys.stdin)["breakEven"];print(b["salesNeeded"] is None or b["salesNeeded"] < 200000)')"
+chk "ratio under 90%" "True" "$(echo "$DF" | python3 -c 'import json,sys;print(json.load(sys.stdin)["breakEven"]["ratio"] < 0.9)')"
+
 echo "== moves & edits =="
 chk "move revenue" 200 "$(curl -s $C -X POST $B/revenue/move -d '{"location_id":1,"from_date":"2026-01-05","to_date":"2026-01-06"}' -o /dev/null -w '%{http_code}')"
 chk "move back" 200 "$(curl -s $C -X POST $B/revenue/move -d '{"location_id":1,"from_date":"2026-01-06","to_date":"2026-01-05"}' -o /dev/null -w '%{http_code}')"

@@ -143,12 +143,24 @@ function summary(locationId, start, end) {
      FROM variable_costs vc JOIN variable_cost_categories c ON c.id = vc.category_id
      WHERE vc.location_id = ? AND vc.date BETWEEN ? AND ?
      GROUP BY c.id ORDER BY c.position`).all(locationId, start, end);
+
+  // One-offs tagged with a cost category (a bulk food buy, say) belong with
+  // that category — they count toward its benchmark and the day-to-day rate.
+  // Untagged ones stay in the "unusual" bucket.
+  const allOneoffs = db.prepare(
+    `SELECT o.description, o.amount, o.invoiced, o.date, o.category_id,
+            c.name category_name, c.benchmark_tag
+     FROM oneoff_costs o LEFT JOIN variable_cost_categories c ON c.id = o.category_id
+     WHERE o.location_id = ? AND o.date BETWEEN ? AND ? ORDER BY o.date`).all(locationId, start, end);
+  const oneoffRows = allOneoffs.filter(r => !r.category_id);
+  for (const r of allOneoffs.filter(r => r.category_id && r.category_name)) {
+    let row = varRows.find(v => v.name === r.category_name);
+    if (!row) { row = { name: r.category_name, benchmark_tag: r.benchmark_tag, amount: 0, invoiced: 0 }; varRows.push(row); }
+    row.amount += r.amount;
+    if (r.invoiced) row.invoiced += r.amount;
+  }
   const variable = varRows.reduce((s, r) => s + r.amount, 0);
   const variableInvoiced = varRows.reduce((s, r) => s + r.invoiced, 0);
-
-  const oneoffRows = db.prepare(
-    `SELECT description, amount, invoiced, date FROM oneoff_costs
-     WHERE location_id = ? AND date BETWEEN ? AND ? ORDER BY date`).all(locationId, start, end);
   const oneoff = oneoffRows.reduce((s, r) => s + r.amount, 0);
   const oneoffInvoiced = oneoffRows.reduce((s, r) => s + (r.invoiced ? r.amount : 0), 0);
 
@@ -208,12 +220,22 @@ function summary(locationId, start, end) {
 // commissions. Each uses this period's actual data when present, otherwise
 // the last 28 days of history, otherwise category defaults — so break-even
 // never quietly drops commissions just because today's costs aren't logged yet.
+// Historical fallback ratios, with sanity rails. A thin or lopsided window
+// (one big grocery run against a single slow day) can produce a ratio like
+// 82%, which combined with real commissions exceeds 100% and makes break-even
+// meaningless. Such a sample is rejected rather than trusted.
+const PLAUSIBLE_VAR_MAX = 0.75;   // day-to-day costs above 75% of sales
+const PLAUSIBLE_COMM_MAX = 0.60;  // blended commission above 60% of sales
+const MIN_SAMPLE_DAYS = 5;
+
 function recentScalingRatios(locationId, before) {
-  const start = addDays(before, -27);
-  const rev = db.prepare(
-    `SELECT COALESCE(SUM(total),0) t FROM revenue_entries WHERE location_id = ? AND date BETWEEN ? AND ?`)
-    .get(locationId, start, before).t;
-  if (rev <= 0) return { varRatio: null, commRatio: null };
+  const start = addDays(before, -89); // look back up to 90 days for a real sample
+  const rows = db.prepare(
+    `SELECT COUNT(*) days, COALESCE(SUM(total),0) t FROM revenue_entries
+     WHERE location_id = ? AND date BETWEEN ? AND ? AND total > 0`)
+    .get(locationId, start, before);
+  const rev = rows.t;
+  if (rev <= 0 || rows.days < MIN_SAMPLE_DAYS) return { varRatio: null, commRatio: null, thin: true };
   const vc = db.prepare(
     `SELECT COALESCE(SUM(amount),0) t FROM variable_costs WHERE location_id = ? AND date BETWEEN ? AND ?`)
     .get(locationId, start, before).t;
@@ -221,7 +243,13 @@ function recentScalingRatios(locationId, before) {
     `SELECT COALESCE(SUM(ri.commission_amount),0) t FROM revenue_items ri
      JOIN revenue_entries re ON re.id = ri.entry_id
      WHERE re.location_id = ? AND re.date BETWEEN ? AND ?`).get(locationId, start, before).t;
-  return { varRatio: vc > 0 ? vc / rev : null, commRatio: cm > 0 ? cm / rev : null };
+  const v = vc > 0 ? vc / rev : null;
+  const c = cm > 0 ? cm / rev : null;
+  return {
+    varRatio: v !== null && v <= PLAUSIBLE_VAR_MAX ? v : null,
+    commRatio: c !== null && c <= PLAUSIBLE_COMM_MAX ? c : null,
+    thin: false
+  };
 }
 
 function breakEven(locationId, start, end, sum) {
@@ -229,30 +257,50 @@ function breakEven(locationId, start, end, sum) {
   const recent = recentScalingRatios(locationId, addDays(start, -1));
   let sources = 0; // how many components come from this period's actual data
 
-  let varRatio;
-  if (sum.revenue > 0 && sum.costs.variable > 0) { varRatio = sum.costs.variable / sum.revenue; sources++; }
-  else if (recent.varRatio !== null) varRatio = recent.varRatio;
-  else varRatio = Math.min(db.prepare(
-    `SELECT COALESCE(SUM(default_percent),0) p FROM variable_cost_categories
-     WHERE location_id = ? AND active = 1 AND entry_mode = 'percent'`).get(locationId).p / 100, 0.9);
+  let varRatio, varSource;
+  if (sum.revenue > 0 && sum.costs.variable > 0) {
+    varRatio = sum.costs.variable / sum.revenue; varSource = 'actual'; sources++;
+  } else if (recent.varRatio !== null) {
+    varRatio = recent.varRatio; varSource = 'history';
+  } else {
+    varRatio = Math.min(db.prepare(
+      `SELECT COALESCE(SUM(default_percent),0) p FROM variable_cost_categories
+       WHERE location_id = ? AND active = 1 AND entry_mode = 'percent'`).get(locationId).p / 100, PLAUSIBLE_VAR_MAX);
+    varSource = 'defaults';
+  }
 
-  let commRatio;
-  if (sum.revenue > 0 && sum.costs.commissions > 0) { commRatio = sum.costs.commissions / sum.revenue; sources++; }
-  else if (recent.commRatio !== null) commRatio = recent.commRatio;
-  else commRatio = Math.min(db.prepare(
-    `SELECT COALESCE(AVG(commission_percent),0) p FROM revenue_categories
-     WHERE location_id = ? AND active = 1`).get(locationId).p / 100, 0.5);
+  let commRatio, commSource;
+  if (sum.revenue > 0 && sum.costs.commissions > 0) {
+    commRatio = sum.costs.commissions / sum.revenue; commSource = 'actual'; sources++;
+  } else if (recent.commRatio !== null) {
+    commRatio = recent.commRatio; commSource = 'history';
+  } else {
+    commRatio = Math.min(db.prepare(
+      `SELECT COALESCE(AVG(commission_percent),0) p FROM revenue_categories
+       WHERE location_id = ? AND active = 1`).get(locationId).p / 100, PLAUSIBLE_COMM_MAX);
+    commSource = 'defaults';
+  }
 
-  const ratio = Math.min(varRatio + commRatio, 0.95);
+  const ratio = varRatio + commRatio;
   const ratioSource = sources === 2 ? 'actual' : sources === 1 ? 'mixed' : 'estimated';
-  if (ratio >= 0.99) return { salesNeeded: null, ratio, varRatio, commRatio, ratioSource, fixed, gap: null, status: 'unprofitable_ratio' };
+  const base = { ratio, varRatio, commRatio, varSource, commSource, ratioSource, fixed };
+
+  // If costs would eat 90%+ of every sale, break-even is either unreachable or
+  // (far more likely) the inputs are wrong. Say so instead of printing a
+  // number that looks authoritative and is off by an order of magnitude.
+  if (ratio >= 0.90) {
+    const guess = varSource !== 'actual'
+      ? "this period has no day-to-day costs logged yet, so the rate had to be estimated"
+      : "day-to-day costs plus commissions are eating almost every peso of sales";
+    return { ...base, salesNeeded: null, gap: null, status: 'ratio_implausible', reason: guess };
+  }
   const salesNeeded = fixed / (1 - ratio);
   const gap = sum.revenue - salesNeeded;
   let status;
   if (salesNeeded === 0 && sum.revenue === 0) status = 'no_data';
   else if (Math.abs(gap) <= salesNeeded * 0.02) status = 'at';
   else status = gap > 0 ? 'above' : 'below';
-  return { salesNeeded, ratio, varRatio, commRatio, ratioSource, fixed, gap, status };
+  return { ...base, salesNeeded, gap, status };
 }
 
 // ---------- daily trend ----------

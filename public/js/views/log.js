@@ -242,14 +242,19 @@
             <select name="account_id"><option value="">—</option>
               ${cats.accounts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select></label>
         </div>
+        <label>What kind of cost? <span class="hint">(so it counts in the right place)</span>
+          <select name="category_id">
+            <option value="">Unusual / doesn't fit a category</option>
+            ${cats.variable.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}
+          </select></label>
         <label class="inv-toggle big"><input type="checkbox" name="invoiced">This cost is invoiced (facturado)</label>
         <button class="btn primary full" type="submit">Save cost</button>
       </form>
       ${list.length ? `<div class="card">
         <div class="card-title">Recent one-offs</div>
         ${list.map(o => `
-          <div class="list-row" data-oneoff='${esc(JSON.stringify({ id: o.id, date: o.date, description: o.description, amount: o.amount, invoiced: o.invoiced, account_id: o.account_id }))}'>
-            <div><strong>${esc(o.description)}</strong>
+          <div class="list-row" data-oneoff='${esc(JSON.stringify({ id: o.id, date: o.date, description: o.description, amount: o.amount, invoiced: o.invoiced, account_id: o.account_id, category_id: o.category_id }))}'>
+            <div><strong>${esc(o.description)}</strong>${o.category_name ? ` <span class="pill good">${esc(o.category_name)}</span>` : ''}
               <div class="hint">${fmtDate(o.date)} · ${o.invoiced ? 'Invoiced' : 'Not invoiced'}${o.logged_by ? ' · by ' + esc(o.logged_by) : ''}${o.receipt ? ` · <a href="/api/oneoff/${o.id}/receipt" target="_blank">📎 receipt</a>` : ''}</div></div>
             <div class="list-right">${money(o.amount)}
               <button class="icon-btn edit-oneoff" aria-label="Edit">✎</button>
@@ -267,7 +272,8 @@
           location_id: state.locationId, date: f.get('date'),
           description: f.get('description'), amount: Number(f.get('amount')),
           invoiced: f.get('invoiced') === 'on',
-          account_id: Number(f.get('account_id')) || null } });
+          account_id: Number(f.get('account_id')) || null,
+          category_id: Number(f.get('category_id')) || null } });
         toast('Cost saved'); render();
       } catch (err) { toast(err.message, true); }
     };
@@ -290,6 +296,11 @@
               <select name="account_id"><option value="">—</option>
                 ${cats.accounts.map(a => `<option value="${a.id}" ${o.account_id === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
           </div>
+          <label>What kind of cost?
+            <select name="category_id">
+              <option value="">Unusual / doesn't fit a category</option>
+              ${cats.variable.map(c => `<option value="${c.id}" ${o.category_id === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+            </select></label>
           <label class="inv-toggle big"><input type="checkbox" name="invoiced" ${o.invoiced ? 'checked' : ''}>Invoiced (facturado)</label>
           <div class="modal-actions">
             <button type="button" class="btn" data-close>Cancel</button>
@@ -304,7 +315,8 @@
             await api(`/oneoff/${o.id}?${qLoc()}`, { method: 'PUT', body: {
               location_id: state.locationId, date: f.get('date'), description: f.get('description'),
               amount: Number(f.get('amount')), invoiced: f.get('invoiced') === 'on',
-              account_id: Number(f.get('account_id')) || null } });
+              account_id: Number(f.get('account_id')) || null,
+              category_id: Number(f.get('category_id')) || null } });
             close(); toast('Saved'); render();
           } catch (err) { toast(err.message, true); }
         };

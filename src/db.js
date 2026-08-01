@@ -351,6 +351,13 @@ if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='cha
   `);
 }
 
+// One-off costs can name a cost category (e.g. a bulk food purchase), so they
+// land in the right bucket for benchmarks and the day-to-day cost rate instead
+// of being lumped in as "unusual".
+if (!hasColumn('oneoff_costs', 'category_id')) {
+  db.exec(`ALTER TABLE oneoff_costs ADD COLUMN category_id INTEGER REFERENCES variable_cost_categories(id)`);
+}
+
 // Employment dates: an employee only costs money inside their active range.
 if (!hasColumn('employees', 'start_date')) {
   db.exec(`ALTER TABLE employees ADD COLUMN start_date TEXT;
