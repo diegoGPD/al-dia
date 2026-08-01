@@ -376,12 +376,13 @@ if (!db.prepare(`SELECT 1 x FROM pragma_table_info('variable_cost_categories') W
     DROP TABLE variable_cost_categories;
     ALTER TABLE variable_cost_categories_new RENAME TO variable_cost_categories;
   `);
-  // Tag existing packaging categories so the new benchmark works right away.
-  db.prepare(`UPDATE variable_cost_categories SET benchmark_tag = 'packaging'
-    WHERE benchmark_tag IS NULL AND (lower(name) LIKE '%packaging%' OR lower(name) LIKE '%empaque%'
-      OR lower(name) LIKE '%to-go%' OR lower(name) LIKE '%desechable%')`).run();
   db.exec('PRAGMA foreign_keys = ON;');
 }
+// Tag packaging-like categories that have no tag yet, whatever schema version
+// the database arrived on, so the benchmark works without manual setup.
+db.prepare(`UPDATE variable_cost_categories SET benchmark_tag = 'packaging'
+  WHERE benchmark_tag IS NULL AND (lower(name) LIKE '%packaging%' OR lower(name) LIKE '%empaque%'
+    OR lower(name) LIKE '%to-go%' OR lower(name) LIKE '%desechable%')`).run();
 
 // One-off costs can name a cost category (e.g. a bulk food purchase), so they
 // land in the right bucket for benchmarks and the day-to-day cost rate instead
