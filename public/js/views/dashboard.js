@@ -47,6 +47,8 @@
       <div class="card">
         <div class="card-title">Break-even point</div>
         <div class="be-row"><span>Sales needed to cover all costs</span><strong>${money(be.salesNeeded)}</strong></div>
+        <div class="hint" style="margin:-2px 0 6px">Fixed part ${money(be.fixed)} =
+          recurring ${money(c.costs.recurring)} + team ${money(c.costs.labor)} + one-offs ${money(c.costs.oneoff)}</div>
         <div class="be-row"><span>Your sales so far</span><strong>${money(c.revenue)}</strong></div>
         <div class="be-row hint-row"><span class="hint">Same thing net of commissions</span>
           <span class="hint">${money(c.revenue - c.costs.commissions)} of ${money(be.salesNeeded * (1 - be.commRatio))} needed — same ${be.salesNeeded > 0 ? Math.round(c.revenue / be.salesNeeded * 100) : 0}% either way</span></div>
@@ -88,6 +90,19 @@
 
     return `
       ${periodBar(d)}
+      ${c.laborDoubleCount ? `
+        <div class="status-banner bad">
+          <div class="status-title">⚠ Payroll looks counted twice</div>
+          <div class="status-sub">This period charges <strong>${money(c.laborRecurring)}</strong> of payroll as a
+            recurring cost <em>and</em> <strong>${money(c.costs.labor)}</strong> from the team schedule — about
+            ${money(Math.min(c.laborRecurring, c.costs.labor))} too much, which drags profit and break-even with it.
+            Keep one: delete the payroll item in Log → Recurring costs (the schedule then drives labor), or clear the
+            schedule if you prefer the fixed figure.</div>
+        </div>` : ''}
+      ${d.elapsed && d.elapsed.partial ? `
+        <div class="hint" style="margin:-6px 0 12px">📅 ${d.elapsed.days} of ${d.elapsed.totalDays} days elapsed —
+          costs bought for the whole ${state.granularity === 'month' ? 'month' : 'period'} (a bulk food order, say)
+          already count, while the sales they'll produce haven't happened yet.</div>` : ''}
       ${d.consistency && d.consistency.ok === false ? `
         <div class="status-banner bad">
           <div class="status-title">⚠ Numbers don't add up</div>

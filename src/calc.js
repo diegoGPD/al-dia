@@ -199,6 +199,7 @@ function summary(locationId, start, end) {
     // Both scheduled labor AND labor-tagged recurring costs present = payroll
     // probably counted twice. Surfaced as a warning in the UI.
     laborDoubleCount: labor > 0 && (rec.byTag.labor || 0) > 0,
+    laborRecurring: rec.byTag.labor || 0,
     invoiced: {
       total: invoicedTotal,
       notInvoiced: totalCosts - invoicedTotal,

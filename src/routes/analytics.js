@@ -58,7 +58,14 @@ module.exports = (r) => {
       breakEven: be,
       benchmarks: calc.benchmarks(current),
       trend: calc.trend(req.locationId, end > today ? today : end, 30),
-      consistency: check
+      consistency: check,
+      // How much of the chosen period has actually happened — a partial week
+      // carries a whole week's bulk purchases against only part of its sales.
+      elapsed: {
+        days: Math.round((Date.parse(end) - Date.parse(start)) / 864e5) + 1,
+        totalDays: Math.round((Date.parse(bounds.end) - Date.parse(start)) / 864e5) + 1,
+        partial: end < bounds.end
+      }
     });
   });
 
