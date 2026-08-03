@@ -67,6 +67,15 @@ chk "apply template" 200 "$(curl -s $C -X POST "$B/schedule/templates/1/apply?lo
 chk "copy last week" 200 "$(curl -s $C -X POST "$B/schedule/copy-last-week" -d '{"location_id":1,"week":"2026-01-12"}' -o /dev/null -w '%{http_code}')"
 S2=$(curl -s $C "$B/schedule?location=1&week=2026-01-12")
 chk "copied week keeps people" 520 "$(echo "$S2" | python3 -c 'import json,sys;print(round(json.load(sys.stdin)["totals"]["cost"]))')"
+echo "== schedule grid =="
+chk "create shift row" 200 "$(curl -s $C -X POST "$B/schedule/rows?location=1" -d '{"location_id":1,"week":"2026-01-05","label":"Mañana","start_min":560,"end_min":960,"color":"#cfe8cf"}' -o /dev/null -w '%{http_code}')"
+chk "assign via cell" 200 "$(curl -s $C -X POST "$B/schedule/cell?location=1" -d "{\"location_id\":1,\"date\":\"2026-01-07\",\"key\":\"Mañana|560|960\",\"employee_id\":$E}" -o /dev/null -w '%{http_code}')"
+chk "grid row keyed by label+times" 1 "$(curl -s $C "$B/schedule?location=1&week=2026-01-05" | python3 -c 'import json,sys;print(len([r for r in json.load(sys.stdin)["rows"] if r["key"]=="Mañana|560|960"]))')"
+chk "cell assignment lands in that row" 1 "$(curl -s $C "$B/schedule?location=1&week=2026-01-05" | python3 -c 'import json,sys;r=[x for x in json.load(sys.stdin)["rows"] if x["key"]=="Mañana|560|960"][0];print(len(r["byDate"].get("2026-01-07",{}).get("employee_ids",[])))')"
+curl -s $C -X POST "$B/schedule/closed?location=1" -d '{"location_id":1,"date":"2026-01-08","closed":true}' >/dev/null
+chk "closed day listed" "2026-01-08" "$(curl -s $C "$B/schedule?location=1&week=2026-01-05" | python3 -c 'import json,sys;print((json.load(sys.stdin)["closed"] or [""])[0])')"
+chk "no assigning on closed day" 400 "$(curl -s $C -X POST "$B/schedule/cell?location=1" -d "{\"location_id\":1,\"date\":\"2026-01-08\",\"key\":\"Mañana|560|960\",\"employee_id\":$E}" -o /dev/null -w '%{http_code}')"
+
 echo "== custom period =="
 CP=$(curl -s $C "$B/dashboard?location=1&granularity=custom&start=2026-01-01&end=2026-01-10")
 chk "custom range respected" "2026-01-01" "$(echo "$CP" | python3 -c 'import json,sys;print(json.load(sys.stdin)["current"]["start"])')"

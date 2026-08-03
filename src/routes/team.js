@@ -52,13 +52,33 @@ function scheduleData(locationId, weekMonday) {
   const totalCost = perEmployee.reduce((s, x) => s + x.cost, 0);
   const totalHours = perEmployee.reduce((s, x) => s + x.hours, 0);
 
+  const closed = db.prepare(
+    'SELECT date FROM closed_days WHERE location_id = ? AND date BETWEEN ? AND ?')
+    .all(locationId, weekMonday, sunday).map(r => r.date);
+
   const budget = calc.recurringForRange(locationId, weekMonday, sunday).byTag.labor || 0;
   let budgetFlag = 'na';
   if (budget > 0) {
     const dev = (totalCost - budget) / budget;
     budgetFlag = dev > 0.10 ? 'over' : dev < -0.10 ? 'under' : 'ok';
   }
-  return { week: weekMonday, days, employees, turns, perEmployee,
+  // Shift rows for the grid: one row per distinct label+times, with the
+  // per-day turn (if any) hanging off it.
+  const rows = [];
+  for (const t of turns) {
+    const key = `${t.label}|${t.start_min}|${t.end_min}`;
+    let row = rows.find(r => r.key === key);
+    if (!row) {
+      row = { key, label: t.label, start_min: t.start_min, end_min: t.end_min,
+              hours: t.hours, color: t.color || null, byDate: {} };
+      rows.push(row);
+    }
+    if (!row.color && t.color) row.color = t.color;
+    row.byDate[t.date] = { id: t.id, employee_ids: t.employee_ids };
+  }
+  rows.sort((a, b) => a.start_min - b.start_min || a.label.localeCompare(b.label));
+
+  return { week: weekMonday, days, employees, turns, rows, closed, perEmployee,
            totals: { hours: totalHours, cost: totalCost },
            budget: { amount: budget, flag: budgetFlag } };
 }
@@ -218,6 +238,112 @@ module.exports = (r) => {
     db.prepare('DELETE FROM turn_assignments WHERE turn_id = ? AND employee_id = ?')
       .run(t.id, Number(req.params.employeeId));
     res.json({ ok: true });
+  });
+
+  // ---- closed days: black out a whole column at once ----
+  r.post('/schedule/closed', checkLocation, (req, res) => {
+    const { date, closed, clear } = req.body;
+    if (badDate(date)) return res.status(400).json({ error: 'Invalid date' });
+    let cleared = 0;
+    if (closed) {
+      db.prepare('INSERT OR IGNORE INTO closed_days (location_id, date) VALUES (?,?)')
+        .run(req.locationId, date);
+      if (clear !== false) {
+        // Nobody works on a closed day — drop that day's assignments (the turn
+        // rows themselves stay, so reopening restores the layout).
+        cleared = db.prepare(
+          `DELETE FROM turn_assignments WHERE turn_id IN
+             (SELECT id FROM turns WHERE location_id = ? AND date = ?)`)
+          .run(req.locationId, date).changes;
+      }
+    } else {
+      db.prepare('DELETE FROM closed_days WHERE location_id = ? AND date = ?')
+        .run(req.locationId, date);
+    }
+    res.json({ ok: true, closed: !!closed, cleared });
+  });
+
+  // ---- shift rows: create/edit/delete a row across the whole week ----
+  // A row is a label+times; the per-day turns are created on demand.
+  r.post('/schedule/rows', checkLocation, (req, res) => {
+    const { week, label, start_min, end_min, color, days } = req.body;
+    if (badDate(week)) return res.status(400).json({ error: 'Invalid week' });
+    const s = Math.max(0, Math.min(1439, num(start_min))), e = Math.max(0, Math.min(1439, num(end_min)));
+    if (s === e) return res.status(400).json({ error: 'Start and end are the same' });
+    const monday = mondayOf(week);
+    const closedSet = new Set(db.prepare(
+      'SELECT date FROM closed_days WHERE location_id = ? AND date BETWEEN ? AND ?')
+      .all(req.locationId, monday, addDays(monday, 6)).map(x => x.date));
+    const wanted = Array.isArray(days) && days.length
+      ? days.filter(d => !badDate(d))
+      : Array.from({ length: 7 }, (_, i) => addDays(monday, i));
+    const ins = db.prepare(
+      'INSERT INTO turns (location_id, date, label, start_min, end_min, position, color) VALUES (?,?,?,?,?,?,?)');
+    let created = 0;
+    for (const d of wanted) {
+      if (closedSet.has(d)) continue;
+      const exists = db.prepare(
+        'SELECT id FROM turns WHERE location_id = ? AND date = ? AND label = ? AND start_min = ? AND end_min = ?')
+        .get(req.locationId, d, (label || 'Turno').trim(), s, e);
+      if (exists) continue;
+      ins.run(req.locationId, d, (label || 'Turno').trim().slice(0, 40) || 'Turno', s, e, s, color || null);
+      created++;
+    }
+    res.json({ ok: true, created });
+  });
+
+  // Edit or delete every turn belonging to one row of the grid, for this week.
+  r.put('/schedule/rows', checkLocation, (req, res) => {
+    const { week, key, label, start_min, end_min, color } = req.body;
+    if (badDate(week) || !key) return res.status(400).json({ error: 'Invalid request' });
+    const [oldLabel, oldStart, oldEnd] = String(key).split('|');
+    const monday = mondayOf(week);
+    const s = start_min !== undefined ? Math.max(0, Math.min(1439, num(start_min))) : Number(oldStart);
+    const e = end_min !== undefined ? Math.max(0, Math.min(1439, num(end_min))) : Number(oldEnd);
+    if (s === e) return res.status(400).json({ error: 'Start and end are the same' });
+    const changed = db.prepare(
+      `UPDATE turns SET label = ?, start_min = ?, end_min = ?, color = ?
+       WHERE location_id = ? AND date BETWEEN ? AND ? AND label = ? AND start_min = ? AND end_min = ?`)
+      .run(label !== undefined ? String(label).trim().slice(0, 40) || 'Turno' : oldLabel, s, e,
+        color !== undefined ? color : null,
+        req.locationId, monday, addDays(monday, 6), oldLabel, Number(oldStart), Number(oldEnd)).changes;
+    res.json({ ok: true, changed });
+  });
+
+  r.delete('/schedule/rows', checkLocation, (req, res) => {
+    const { week, key } = req.query;
+    if (badDate(week) || !key) return res.status(400).json({ error: 'Invalid request' });
+    const [label, start, end] = String(key).split('|');
+    const monday = mondayOf(week);
+    const changed = db.prepare(
+      `DELETE FROM turns WHERE location_id = ? AND date BETWEEN ? AND ?
+         AND label = ? AND start_min = ? AND end_min = ?`)
+      .run(req.locationId, monday, addDays(monday, 6), label, Number(start), Number(end)).changes;
+    res.json({ ok: true, changed });
+  });
+
+  // Assign into a grid cell, creating that day's turn if it doesn't exist yet.
+  r.post('/schedule/cell', checkLocation, (req, res) => {
+    const { date, key, employee_id, color } = req.body;
+    if (badDate(date) || !key) return res.status(400).json({ error: 'Invalid request' });
+    if (db.prepare('SELECT 1 x FROM closed_days WHERE location_id = ? AND date = ?').get(req.locationId, date))
+      return res.status(400).json({ error: 'That day is marked closed' });
+    const [label, start, end] = String(key).split('|');
+    let turn = db.prepare(
+      `SELECT id FROM turns WHERE location_id = ? AND date = ? AND label = ? AND start_min = ? AND end_min = ?`)
+      .get(req.locationId, date, label, Number(start), Number(end));
+    if (!turn) {
+      turn = { id: Number(db.prepare(
+        'INSERT INTO turns (location_id, date, label, start_min, end_min, position, color) VALUES (?,?,?,?,?,?,?)')
+        .run(req.locationId, date, label, Number(start), Number(end), Number(start), color || null).lastInsertRowid) };
+    }
+    const emp = db.prepare('SELECT * FROM employees WHERE id = ? AND location_id = ? AND active = 1')
+      .get(Number(employee_id), req.locationId);
+    if (!emp) return res.status(404).json({ error: 'Employee not found' });
+    if (!activeOn(emp, date))
+      return res.status(400).json({ error: `${emp.name} wasn't employed on ${date}` });
+    db.prepare('INSERT OR IGNORE INTO turn_assignments (turn_id, employee_id) VALUES (?,?)').run(turn.id, emp.id);
+    res.json({ ok: true, turn_id: turn.id });
   });
 
   // Batch save: everything the user staged in the schedule editor, applied in

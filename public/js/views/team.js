@@ -17,6 +17,7 @@
   const toMin = t => { const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
   const toHHMM = min => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
   const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const DAY_ES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
   const activeOn = (e, date) =>
     (e.start_date || '0000-01-01') <= date && (!e.end_date || e.end_date >= date);
   let showFormer = false;
@@ -86,56 +87,67 @@
     return { hours, cost, byEmp };
   }
 
-  function dayBlocksHtml(d, templates) {
+  const ROW_PALETTE = ['#cfe8cf', '#cfe0f5', '#f7d488', '#e8cfe4', '#cfe8e4', '#f5d5cf'];
+  const colorFor = (row, i) => row.color || ROW_PALETTE[i % ROW_PALETTE.length];
+
+  // The whole schedule as one spreadsheet: shift rows down the side, days
+  // across the top, a name in each cell. Closed days black out entirely.
+  function gridHtml(d) {
     const empById = Object.fromEntries(d.employees.map(e => [e.id, e]));
-    const dayBlock = (date, i) => {
-      const turns = d.turns.filter(t => t.date === date);
-      return `
-      <details class="day-block" ${date === today() ? 'open' : ''}>
-        <summary><strong>${DAY_NAMES[i]} ${date.slice(8)}</strong>
-          <span class="hint">${turns.length ? `${turns.length} turn${turns.length > 1 ? 's' : ''} · ${turns.reduce((s, t) => s + t.employee_ids.length, 0)} people` : 'no turns yet'}</span>
-        </summary>
-        ${turns.map(t => `
-          <div class="turn-card">
-            <div class="turn-head">
-              <div><strong>${esc(t.label)}</strong>
-                <span class="hint">${fmtTime(t.start_min)} – ${fmtTime(t.end_min)} · ${t.hours.toFixed(1)}h</span></div>
-              <div>
-                <button class="icon-btn edit-turn" data-turn="${t.id}" aria-label="Edit">✎</button>
-                <button class="icon-btn danger del-turn" data-turn="${t.id}" aria-label="Delete">✕</button>
-              </div>
-            </div>
-            <div class="turn-people">
-              ${t.employee_ids.map(id => {
-                const e = empById[id];
-                const inactive = e && !activeOn(e, t.date);
-                return `<span class="person-chip ${inactive ? 'inactive' : ''}"
-                  ${inactive ? 'title="Not employed on this date — not counted in labor cost"' : ''}>${esc(e?.name || '?')}${inactive ? ' <span class="hint">(former)</span>' : ''}
-                  <button class="chip-x" data-turn="${t.id}" data-emp="${id}" aria-label="Remove">✕</button></span>`;
-              }).join('')}
-              ${(() => {
-                // Only people employed on this date can be assigned.
-                const free = d.employees.filter(e => !t.employee_ids.includes(e.id) && activeOn(e, t.date));
-                return free.length ? `
-                  <select class="add-person" data-turn="${t.id}">
-                    <option value="">+ Add…</option>
-                    ${free.map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('')}
-                  </select>` : '';
-              })()}
-            </div>
-          </div>`).join('')}
-        <div class="day-actions">
-          <button class="btn tiny add-turn" data-date="${date}">+ Turn</button>
-          ${templates.length ? `
-            <select class="apply-tpl" data-date="${date}">
-              <option value="">Apply template…</option>
-              ${templates.map(t => `<option value="${t.id}">${esc(t.name)} (${t.turns.length})</option>`).join('')}
-            </select>` : ''}
-          ${turns.length ? `<button class="btn tiny save-tpl" data-date="${date}">💾 Save as template</button>` : ''}
-        </div>
-      </details>`;
+    const closed = new Set(d.closed || []);
+    const rows = d.rows || [];
+
+    const cell = (row, date) => {
+      if (closed.has(date)) return '<td class="cell closed"></td>';
+      const t = row.byDate[date];
+      const ids = t ? t.employee_ids : [];
+      const names = ids.map(id => {
+        const e = empById[id];
+        const gone = e && !activeOn(e, date);
+        return `<span class="${gone ? 'gone' : ''}">${esc(e ? e.name : '?')}</span>`;
+      }).join('<br>');
+      return `<td class="cell ${ids.length ? 'filled' : ''}" data-key="${esc(row.key)}" data-date="${date}"
+        ${ids.length ? `style="background:${colorFor(row, rows.indexOf(row))}"` : ''}>${names || '<span class="plus">+</span>'}</td>`;
     };
-    return d.days.map((date, i) => dayBlock(date, i)).join('');
+
+    return `
+      <div class="sheet-wrap">
+        <table class="sheet">
+          <thead>
+            <tr>
+              <th class="shift-col">Turno</th>
+              ${d.days.map((date, i) => `
+                <th class="${closed.has(date) ? 'closed' : ''} ${date === today() ? 'today' : ''}">
+                  <div>${DAY_ES[i]}</div>
+                  <div class="hint">${date.slice(8)}</div>
+                  <button class="btn tiny toggle-closed" data-date="${date}"
+                    title="${closed.has(date) ? 'Reopen this day' : 'Mark the whole day closed'}">${closed.has(date) ? 'Abrir' : 'Cerrar'}</button>
+                </th>`).join('')}
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row, i) => `
+              <tr>
+                <th class="shift-col" style="background:${colorFor(row, i)}">
+                  <div class="shift-label">${esc(row.label)}</div>
+                  <div class="shift-time">${fmtTime(row.start_min)} – ${fmtTime(row.end_min)}</div>
+                  <div class="shift-actions">
+                    <button class="icon-btn edit-row" data-key="${esc(row.key)}" aria-label="Edit">✎</button>
+                    <button class="icon-btn danger del-row" data-key="${esc(row.key)}" aria-label="Delete">✕</button>
+                  </div>
+                </th>
+                ${d.days.map(date => cell(row, date)).join('')}
+              </tr>`).join('')}
+            ${rows.length ? '' : `<tr><td class="cell" colspan="8">
+              <span class="hint">No shifts yet — add one below to start the week.</span></td></tr>`}
+          </tbody>
+        </table>
+      </div>
+      <div class="sheet-actions">
+        <button class="btn tiny" id="addRow">+ Turno</button>
+        <button class="btn tiny" id="copyWeek">⧉ Copiar semana pasada</button>
+        <button class="btn tiny" id="exportPng">⬇ Imagen</button>
+      </div>`;
   }
 
   registerRoute('schedule', async () => {
@@ -180,13 +192,9 @@
               <div class="bd-inv hint">${p.hours.toFixed(1)}h${empById[p.employee_id]?.pay_type === 'salary' ? ' · salary' : ''}</div></div>`).join('')}
         </details>` : ''}
         <div class="hint">Labor books itself into your numbers day by day — nothing to log elsewhere.</div>
-        <div class="sched-actions">
-          <button class="btn tiny" id="copyWeek">⧉ Copy last week</button>
-          <button class="btn tiny" id="exportPng">⬇ Export as image</button>
-        </div>
       </div>
 
-      <div id="dayBlocks">${dayBlocksHtml(d, templates)}</div>
+      <div id="dayBlocks">${gridHtml(d)}</div>
       <div id="saveBar" class="save-bar" style="display:none">
         <span id="saveCount"></span>
         <div>
@@ -233,9 +241,9 @@
   registerRoute('schedule_bind', (app) => {
     const rerender = () => render();
 
-    // Re-paint just the day grid from memory — no network, no page reload.
+    // Re-paint just the grid from memory — no network, no page reload.
     function repaint() {
-      app.querySelector('#dayBlocks').innerHTML = dayBlocksHtml(sched, templates_);
+      app.querySelector('#dayBlocks').innerHTML = gridHtml(sched);
       bindGrid();
       const totals = liveTotals(sched);
       app.querySelector('#wkHours').textContent = totals.hours.toFixed(1);
@@ -257,40 +265,46 @@
     };
 
     function bindGrid() {
-      app.querySelectorAll('.add-turn').forEach(b => b.onclick = withFlush(() => turnDialog(b.dataset.date, null)));
-      app.querySelectorAll('.edit-turn').forEach(b => b.onclick = withFlush(() => {
-        const t = sched.turns.find(x => x.id === Number(b.dataset.turn));
-        if (t) turnDialog(t.date, t);
-      }));
-      app.querySelectorAll('.del-turn').forEach(b => b.onclick = withFlush(async () => {
-        if (!confirm('Delete this turn (and its assignments)?')) return;
-        await api(`/schedule/turns/${b.dataset.turn}?${qLoc()}`, { method: 'DELETE' });
-        toast('Turn deleted'); rerender();
-      }));
-      // staged, in-memory only
-      app.querySelectorAll('.add-person').forEach(sel => sel.onchange = () => {
-        if (!sel.value) return;
-        stagePerson(Number(sel.dataset.turn), Number(sel.value), 'add');
-        repaint();
+      // Tap a cell -> pick or clear who works that shift that day.
+      app.querySelectorAll('.cell[data-key]').forEach(td => td.onclick = () => {
+        const row = sched.rows.find(r => r.key === td.dataset.key);
+        if (row) cellDialog(row, td.dataset.date, repaint);
       });
-      app.querySelectorAll('.chip-x').forEach(x => x.onclick = () => {
-        stagePerson(Number(x.dataset.turn), Number(x.dataset.emp), 'remove');
-        repaint();
-      });
-      app.querySelectorAll('.apply-tpl').forEach(sel => sel.onchange = withFlush(async () => {
-        if (!sel.value) return;
-        if (!confirm("Replace this day's turns with the template? (People are not copied.)")) { sel.value = ''; return; }
-        await api(`/schedule/templates/${sel.value}/apply?${qLoc()}`, {
-          method: 'POST', body: { location_id: state.locationId, date: sel.dataset.date } });
-        toast('Template applied'); rerender();
+      // Black out (or reopen) a whole day.
+      app.querySelectorAll('.toggle-closed').forEach(b => b.onclick = withFlush(async (ev) => {
+        ev.stopPropagation();
+        const date = b.dataset.date;
+        const isClosed = (sched.closed || []).includes(date);
+        if (!isClosed && !confirm(`Mark ${fmtDate(date)} as closed? Anyone scheduled that day is removed.`)) return;
+        await api(`/schedule/closed?${qLoc()}`, { method: 'POST',
+          body: { location_id: state.locationId, date, closed: !isClosed } });
+        toast(isClosed ? 'Día abierto' : 'Día cerrado'); rerender();
       }));
-      app.querySelectorAll('.save-tpl').forEach(b => b.onclick = async () => {
-        const name = prompt('Template name (e.g. "Weekday", "Weekend"):');
-        if (!name) return;
-        await api(`/schedule/templates?${qLoc()}`, {
-          method: 'POST', body: { location_id: state.locationId, name, date: b.dataset.date } });
-        toast('Template saved'); rerender();
+      // Shift rows
+      app.querySelectorAll('.edit-row').forEach(b => b.onclick = withFlush((ev) => {
+        ev.stopPropagation();
+        rowDialog(sched.rows.find(r => r.key === b.dataset.key));
+      }));
+      app.querySelectorAll('.del-row').forEach(b => b.onclick = withFlush(async (ev) => {
+        ev.stopPropagation();
+        if (!confirm('Delete this shift row for the whole week?')) return;
+        await api(`/schedule/rows?${qLoc()}&week=${schedWeek}&key=${encodeURIComponent(b.dataset.key)}`,
+          { method: 'DELETE' });
+        toast('Turno eliminado'); rerender();
+      }));
+      const add = app.querySelector('#addRow');
+      if (add) add.onclick = withFlush(() => rowDialog(null));
+      const cw = app.querySelector('#copyWeek');
+      if (cw) cw.onclick = withFlush(async () => {
+        if (!confirm('Replace this week with a copy of last week (shifts and people)?')) return;
+        try {
+          const r = await api('/schedule/copy-last-week', { method: 'POST',
+            body: { location_id: state.locationId, week: schedWeek } });
+          toast(`Copied ${r.copied} turns`); rerender();
+        } catch (err) { toast(err.message, true); }
       });
+      const ex = app.querySelector('#exportPng');
+      if (ex) ex.onclick = withFlush(() => exportSchedulePng());
     }
     bindGrid();
 
@@ -316,17 +330,6 @@
     const tw = app.querySelector('#thisWeek');
     if (tw) tw.onclick = guard(() => { schedWeek = mondayOf(today()); rerender(); });
 
-    // copy last week / export
-    app.querySelector('#copyWeek').onclick = withFlush(async () => {
-      if (!confirm('Replace this week with a copy of last week (turns and people)?')) return;
-      try {
-        const r = await api('/schedule/copy-last-week', { method: 'POST',
-          body: { location_id: state.locationId, week: schedWeek } });
-        toast(`Copied ${r.copied} turns`); rerender();
-      } catch (err) { toast(err.message, true); }
-    });
-    app.querySelector('#exportPng').onclick = withFlush(() => exportSchedulePng());
-
     // roster
     const form = app.querySelector('#empForm');
     form.onsubmit = async (e) => {
@@ -347,41 +350,91 @@
     if (sf) sf.onchange = () => { showFormer = sf.checked; rerender(); };
   });
 
-  // Fast turn creation: remembers your last label + times as defaults.
-  function turnDialog(date, existing) {
-    const last = JSON.parse(localStorage.getItem('aldia_last_turn') || '{"label":"Turno","s":"09:00","e":"17:00"}');
+  // Tap a cell: choose who works this shift on this day, or clear it.
+  function cellDialog(row, date, done) {
+    const cur = (row.byDate[date] && row.byDate[date].employee_ids) || [];
+    const eligible = sched.employees.filter(e => activeOn(e, date));
+    modal(`
+      <h3>${esc(row.label)} · ${fmtDate(date)}</h3>
+      <p class="hint">${fmtTime(row.start_min)} – ${fmtTime(row.end_min)} · ${row.hours.toFixed(1)} h</p>
+      <div class="pick-list">
+        ${eligible.map(e => `
+          <label class="pick-row">
+            <input type="checkbox" value="${e.id}" ${cur.includes(e.id) ? 'checked' : ''}>
+            <span>${esc(e.name)}${e.position ? ` <span class="hint">· ${esc(e.position)}</span>` : ''}</span>
+          </label>`).join('') || '<p class="hint">Nobody on the roster works on this date.</p>'}
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="button" class="btn primary" id="pickSave">Listo</button>
+      </div>`, (wrap, close) => {
+      wrap.querySelector('[data-close]').onclick = close;
+      wrap.querySelector('#pickSave').onclick = async () => {
+        const picked = [...wrap.querySelectorAll('input[type=checkbox]:checked')].map(x => Number(x.value));
+        const turn = row.byDate[date];
+        try {
+          // Anyone newly added may need the day's turn created first.
+          for (const id of picked.filter(id => !cur.includes(id))) {
+            await api(`/schedule/cell?${qLoc()}`, { method: 'POST', body: {
+              location_id: state.locationId, date, key: row.key, employee_id: id, color: row.color } });
+          }
+          if (turn) {
+            for (const id of cur.filter(id => !picked.includes(id))) {
+              await api(`/schedule/turns/${turn.id}/assign/${id}?${qLoc()}`, { method: 'DELETE' });
+            }
+          }
+          close(); render();
+        } catch (err) { toast(err.message, true); }
+      };
+    });
+  }
+
+  // Create or edit a shift row (applies across the week).
+  function rowDialog(existing) {
+    const last = JSON.parse(localStorage.getItem('aldia_last_turn') || '{"label":"Turno","s":"09:20","e":"16:00"}');
     const label = existing ? existing.label : last.label;
     const s = existing ? toHHMM(existing.start_min) : last.s;
     const e = existing ? toHHMM(existing.end_min) : last.e;
+    const color = existing ? (existing.color || ROW_PALETTE[0]) : ROW_PALETTE[0];
     modal(`
-      <h3>${existing ? 'Edit turn' : 'New turn'} — ${fmtDate(date)}</h3>
-      <form id="turnForm">
-        <label>Label<input name="label" value="${esc(label)}" required list="turnLabels"></label>
+      <h3>${existing ? 'Editar turno' : 'Nuevo turno'}</h3>
+      <form id="rowForm">
+        <label>Nombre<input name="label" value="${esc(label)}" required list="turnLabels"></label>
         <datalist id="turnLabels">
-          <option value="Mañana"><option value="Tarde"><option value="Noche">
-          <option value="Cierre"><option value="Fin de semana">
+          <option value="Mañana"><option value="Tarde"><option value="Noche"><option value="Cierre">
         </datalist>
         <div class="row2">
-          <label>Starts<input type="time" name="start" value="${s}" required></label>
-          <label>Ends<input type="time" name="end" value="${e}" required></label>
+          <label>Entra<input type="time" name="start" value="${s}" required></label>
+          <label>Sale<input type="time" name="end" value="${e}" required></label>
         </div>
-        <p class="hint">Ends past midnight? Set the end earlier than the start — it counts into the next day. Turns may overlap for handoffs.</p>
+        <label>Color</label>
+        <div class="swatches">
+          ${ROW_PALETTE.map(c => `<button type="button" class="swatch ${c === color ? 'on' : ''}"
+            data-color="${c}" style="background:${c}"></button>`).join('')}
+        </div>
+        <p class="hint">Applies to the whole week — closed days are skipped. Ends past midnight? Set the end
+          earlier than the start.</p>
         <div class="modal-actions">
           <button type="button" class="btn" data-close>Cancel</button>
-          <button type="submit" class="btn primary">${existing ? 'Save' : 'Add turn'}</button>
+          <button type="submit" class="btn primary">${existing ? 'Guardar' : 'Agregar'}</button>
         </div>
       </form>`, (wrap, close) => {
+      let picked = color;
+      wrap.querySelectorAll('.swatch').forEach(b => b.onclick = () => {
+        picked = b.dataset.color;
+        wrap.querySelectorAll('.swatch').forEach(x => x.classList.toggle('on', x === b));
+      });
       wrap.querySelector('[data-close]').onclick = close;
-      wrap.querySelector('#turnForm').onsubmit = async ev => {
+      wrap.querySelector('#rowForm').onsubmit = async ev => {
         ev.preventDefault();
         const f = new FormData(ev.target);
         const body = {
-          location_id: state.locationId, date,
-          label: f.get('label'), start_min: toMin(f.get('start')), end_min: toMin(f.get('end'))
+          location_id: state.locationId, week: schedWeek, label: f.get('label'),
+          start_min: toMin(f.get('start')), end_min: toMin(f.get('end')), color: picked
         };
         try {
-          if (existing) await api(`/schedule/turns/${existing.id}?${qLoc()}`, { method: 'PUT', body });
-          else await api(`/schedule/turns?${qLoc()}`, { method: 'POST', body });
+          if (existing) await api(`/schedule/rows?${qLoc()}`, { method: 'PUT', body: { ...body, key: existing.key } });
+          else await api(`/schedule/rows?${qLoc()}`, { method: 'POST', body });
           localStorage.setItem('aldia_last_turn',
             JSON.stringify({ label: f.get('label'), s: f.get('start'), e: f.get('end') }));
           close(); render();
@@ -478,69 +531,89 @@
   }
 
   // PNG export: days × turns with names — no pay information.
+  // PNG export mirrors the grid exactly: shift rows, day columns, names only.
   async function exportSchedulePng() {
     const d = await api(`/schedule?${qLoc()}&week=${schedWeek}`);
     const locName = state.me.locations.find(l => l.id === state.locationId)?.name || '';
     const empById = Object.fromEntries(d.employees.map(e => [e.id, e]));
+    const rows = d.rows || [];
+    const closed = new Set(d.closed || []);
 
-    const colW = 165, headH = 84, dayHeadH = 34, pad = 8;
-    const blockH = t => 40 + t.employee_ids.length * 16 + 8;
-    const colHeights = d.days.map(date =>
-      d.turns.filter(t => t.date === date).reduce((s, t) => s + blockH(t) + 6, 0));
-    const bodyH = Math.max(120, ...colHeights) + 16;
-    const W = colW * 7 + 2, H = headH + dayHeadH + bodyH;
+    const shiftW = 150, dayW = 132, headH = 76, dayHeadH = 40, pad = 10;
+    const rowH = r => Math.max(46, 22 + Math.max(1, Math.max(...d.days.map(dt =>
+      ((r.byDate[dt] || {}).employee_ids || []).length), 1)) * 17);
+    const heights = rows.map(rowH);
+    const W = shiftW + dayW * 7, H = headH + dayHeadH + heights.reduce((a, b) => a + b, 0) + 12;
     const scale = 2;
     const cv = document.createElement('canvas');
     cv.width = W * scale; cv.height = H * scale;
     const ctx = cv.getContext('2d');
     ctx.scale(scale, scale);
-
     ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+
+    // header
     ctx.fillStyle = '#1a7f5a'; ctx.fillRect(0, 0, W, headH);
     ctx.fillStyle = '#fff';
-    ctx.font = '700 22px -apple-system, Segoe UI, Roboto, sans-serif';
-    ctx.fillText(locName, 16, 34);
-    ctx.font = '400 15px -apple-system, Segoe UI, Roboto, sans-serif';
-    ctx.fillText(`Semana: ${fmtRange(d.days[0], d.days[6])}`, 16, 60);
+    ctx.font = '700 21px -apple-system, Segoe UI, Roboto, sans-serif';
+    ctx.fillText(locName, pad, 32);
+    ctx.font = '400 14px -apple-system, Segoe UI, Roboto, sans-serif';
+    ctx.fillText(`Semana: ${fmtRange(d.days[0], d.days[6])}`, pad, 56);
 
-    ctx.fillStyle = '#f5f7f6'; ctx.fillRect(0, headH, W, dayHeadH);
+    // day header
+    ctx.fillStyle = '#f2f5f4'; ctx.fillRect(0, headH, W, dayHeadH);
     d.days.forEach((date, i) => {
+      const x = shiftW + i * dayW;
+      if (closed.has(date)) { ctx.fillStyle = '#2d3436'; ctx.fillRect(x, headH, dayW, dayHeadH); }
+      ctx.fillStyle = closed.has(date) ? '#fff' : '#1e2a26';
+      ctx.font = '700 13px -apple-system, Segoe UI, Roboto, sans-serif';
+      ctx.fillText(DAY_ES[i], x + 8, headH + 18);
+      ctx.font = '400 11px -apple-system, Segoe UI, Roboto, sans-serif';
+      ctx.fillText(date.slice(8) + (closed.has(date) ? ' · CERRADO' : ''), x + 8, headH + 33);
+    });
+
+    // rows
+    let y = headH + dayHeadH;
+    rows.forEach((row, ri) => {
+      const h = heights[ri];
+      const color = row.color || ROW_PALETTE[ri % ROW_PALETTE.length];
+      ctx.fillStyle = color; ctx.fillRect(0, y, shiftW, h);
       ctx.fillStyle = '#1e2a26';
       ctx.font = '700 13px -apple-system, Segoe UI, Roboto, sans-serif';
-      ctx.fillText(`${DAY_NAMES[i]} ${date.slice(8)}`, i * colW + pad, headH + 22);
-    });
+      ctx.fillText(row.label.slice(0, 18), 8, y + 20);
+      ctx.font = '400 11px -apple-system, Segoe UI, Roboto, sans-serif';
+      ctx.fillText(`${fmtTime(row.start_min)} – ${fmtTime(row.end_min)}`, 8, y + 36);
 
-    d.days.forEach((date, i) => {
-      let y = headH + dayHeadH + 8;
-      const x = i * colW + pad;
-      for (const t of d.turns.filter(t => t.date === date)) {
-        const h = blockH(t);
-        ctx.fillStyle = '#e6f4ee';
-        if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, colW - pad * 2, h, 8); ctx.fill(); }
-        else ctx.fillRect(x, y, colW - pad * 2, h);
-        ctx.fillStyle = '#14684a';
-        ctx.font = '700 12px -apple-system, Segoe UI, Roboto, sans-serif';
-        ctx.fillText(t.label.slice(0, 18), x + 8, y + 16);
-        ctx.font = '600 11px -apple-system, Segoe UI, Roboto, sans-serif';
-        ctx.fillText(`${fmtTime(t.start_min)} – ${fmtTime(t.end_min)}`, x + 8, y + 31);
+      d.days.forEach((date, i) => {
+        const x = shiftW + i * dayW;
+        const ids = ((row.byDate[date] || {}).employee_ids) || [];
+        if (closed.has(date)) { ctx.fillStyle = '#2d3436'; ctx.fillRect(x, y, dayW, h); return; }
+        if (ids.length) { ctx.fillStyle = color; ctx.fillRect(x, y, dayW, h); }
         ctx.fillStyle = '#1e2a26';
-        ctx.font = '400 11px -apple-system, Segoe UI, Roboto, sans-serif';
-        t.employee_ids.forEach((id, k) => {
-          ctx.fillText('· ' + (empById[id]?.name || '?').slice(0, 20), x + 8, y + 46 + k * 16);
+        ctx.font = '600 13px -apple-system, Segoe UI, Roboto, sans-serif';
+        ids.forEach((id, k) => {
+          ctx.fillText((empById[id]?.name || '?').slice(0, 16), x + 8, y + 22 + k * 17);
         });
-        y += h + 6;
-      }
+      });
+      y += h;
     });
 
-    ctx.strokeStyle = '#e3e9e6';
+    // grid lines
+    ctx.strokeStyle = '#d8e0dc'; ctx.lineWidth = 1;
     for (let i = 0; i <= 7; i++) {
-      ctx.beginPath(); ctx.moveTo(i * colW, headH); ctx.lineTo(i * colW, H); ctx.stroke();
+      const x = shiftW + i * dayW;
+      ctx.beginPath(); ctx.moveTo(x, headH); ctx.lineTo(x, H - 12); ctx.stroke();
     }
+    let ly = headH + dayHeadH;
+    ctx.beginPath(); ctx.moveTo(0, ly); ctx.lineTo(W, ly); ctx.stroke();
+    heights.forEach(h => {
+      ly += h;
+      ctx.beginPath(); ctx.moveTo(0, ly); ctx.lineTo(W, ly); ctx.stroke();
+    });
 
     const a = document.createElement('a');
     a.download = `horario-${locName.replace(/\s+/g, '-').toLowerCase()}-${d.week}.png`;
     a.href = cv.toDataURL('image/png');
     a.click();
-    toast('Schedule image downloaded');
+    toast('Horario descargado');
   }
 })();

@@ -351,6 +351,19 @@ if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='cha
   `);
 }
 
+// Days the restaurant is closed — blacked out across the whole schedule grid.
+if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='closed_days'`).get()) {
+  db.exec(`CREATE TABLE closed_days (
+    location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    PRIMARY KEY (location_id, date)
+  );`);
+}
+// A colour per shift row, so the grid reads like the owner's spreadsheet.
+if (!hasColumn('turns', 'color')) {
+  db.exec(`ALTER TABLE turns ADD COLUMN color TEXT`);
+}
+
 // Packaging deserves its own benchmark line (delivery-heavy kitchens spend
 // real money on it), so the tag list gains 'packaging'. SQLite can't alter a
 // CHECK constraint in place — rebuild the table, preserving every row.

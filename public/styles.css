@@ -306,6 +306,39 @@ strong.neg { color: var(--red); }
 .del-choice .hint { margin: 6px 0 0; }
 .danger-zone .btn { border-color: var(--red); }
 
+/* ---------- spreadsheet schedule grid ---------- */
+.sheet-wrap {
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 8px;
+}
+.sheet { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 13px; }
+.sheet th, .sheet td { border: 1px solid #d8e0dc; padding: 6px 8px; vertical-align: middle; }
+.sheet thead th { background: #fff; font-weight: 700; text-align: center; white-space: nowrap; }
+.sheet thead th.today { background: var(--green-light); }
+.sheet thead th.closed { background: #2d3436; color: #fff; }
+.sheet thead th.closed .hint { color: #b2bec3; }
+.sheet thead .btn.tiny { margin-top: 4px; padding: 2px 8px; font-size: 11px; }
+.shift-col { width: 148px; min-width: 148px; text-align: left !important; position: sticky; left: 0; z-index: 2; }
+.sheet tbody .shift-col { font-weight: 600; }
+.shift-label { font-size: 13px; }
+.shift-time { font-size: 11px; color: #405048; white-space: nowrap; }
+.shift-actions { display: flex; gap: 2px; margin-top: 3px; }
+.shift-actions .icon-btn { width: 22px; height: 22px; font-size: 11px; background: rgba(255,255,255,.65); }
+.sheet td.cell { cursor: pointer; text-align: center; min-width: 92px; height: 42px; background: #fff; }
+.sheet td.cell:hover { outline: 2px solid var(--green); outline-offset: -2px; }
+.sheet td.cell.closed { background: #2d3436; cursor: default; }
+.sheet td.cell.closed:hover { outline: 0; }
+.sheet td.cell .plus { color: #c8d2cd; font-size: 16px; }
+.sheet td.cell .gone { text-decoration: line-through; opacity: .6; }
+.sheet-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
+.pick-list { max-height: 46vh; overflow-y: auto; margin-bottom: 10px; }
+.pick-row { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--line);
+  font-weight: 600; margin: 0; }
+.pick-row input { width: 20px; height: 20px; margin: 0; }
+.swatches { display: flex; gap: 8px; margin-bottom: 12px; }
+.swatch { width: 34px; height: 34px; border-radius: 8px; border: 2px solid var(--line); cursor: pointer; }
+.swatch.on { border-color: var(--ink); transform: scale(1.08); }
+
 /* ---------- turn-based schedule ---------- */
 .day-block {
   background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);
