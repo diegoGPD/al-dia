@@ -76,6 +76,14 @@ curl -s $C -X POST "$B/schedule/closed?location=1" -d '{"location_id":1,"date":"
 chk "closed day listed" "2026-01-08" "$(curl -s $C "$B/schedule?location=1&week=2026-01-05" | python3 -c 'import json,sys;print((json.load(sys.stdin)["closed"] or [""])[0])')"
 chk "no assigning on closed day" 400 "$(curl -s $C -X POST "$B/schedule/cell?location=1" -d "{\"location_id\":1,\"date\":\"2026-01-08\",\"key\":\"Mañana|560|960\",\"employee_id\":$E}" -o /dev/null -w '%{http_code}')"
 
+TAGID=$(curl -s $C -X POST "$B/staff-tags?location=1" -d '{"location_id":1,"name":"Cocinero","color":"#2d6cdf"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
+chk "tag created" "Cocinero" "$(curl -s $C "$B/staff-tags?location=1" | python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["name"])')"
+curl -s $C -X PUT "$B/employees/$E?location=1" -d "{\"location_id\":1,\"tag_id\":$TAGID}" >/dev/null
+chk "employee carries tag" "Cocinero" "$(curl -s $C "$B/employees?location=1" | python3 -c 'import json,sys;print([e["tag_name"] for e in json.load(sys.stdin) if e["id"]=='"$E"'][0])')"
+chk "schedule exposes tags" 1 "$(curl -s $C "$B/schedule?location=1&week=2026-01-05" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["tags"]))')"
+curl -s $C -X DELETE "$B/staff-tags/$TAGID?location=1" >/dev/null
+chk "deleting tag keeps person" 1 "$(curl -s $C "$B/employees?location=1" | python3 -c 'import json,sys;print(len([e for e in json.load(sys.stdin) if e["id"]=='"$E"']))')"
+
 echo "== custom period =="
 CP=$(curl -s $C "$B/dashboard?location=1&granularity=custom&start=2026-01-01&end=2026-01-10")
 chk "custom range respected" "2026-01-01" "$(echo "$CP" | python3 -c 'import json,sys;print(json.load(sys.stdin)["current"]["start"])')"

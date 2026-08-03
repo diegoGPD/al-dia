@@ -339,6 +339,13 @@ strong.neg { color: var(--red); }
 .swatch { width: 34px; height: 34px; border-radius: 8px; border: 2px solid var(--line); cursor: pointer; }
 .swatch.on { border-color: var(--ink); transform: scale(1.08); }
 
+/* ---------- staff role tags ---------- */
+.tag-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px;
+  vertical-align: middle; flex: none; }
+.tag-chip { display: inline-flex; align-items: center; background: var(--bg); border-radius: 999px;
+  padding: 2px 9px; font-size: 11px; font-weight: 600; color: var(--muted); margin-left: 4px; }
+.tag-legend { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 10px 0 0; }
+
 /* ---------- turn-based schedule ---------- */
 .day-block {
   background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);

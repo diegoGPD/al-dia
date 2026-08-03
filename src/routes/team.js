@@ -17,9 +17,11 @@ function scheduleData(locationId, weekMonday) {
   // Everyone who could work any day this week, plus anyone already assigned
   // (so historical weeks still show who was there, marked as former).
   const employees = db.prepare(
-    `SELECT * FROM employees WHERE location_id = ? AND active = 1
-       AND COALESCE(start_date,'0000-01-01') <= ? AND (end_date IS NULL OR end_date >= ?)
-     ORDER BY name`).all(locationId, sunday, weekMonday);
+    `SELECT e.*, t.name tag_name, t.color tag_color FROM employees e
+     LEFT JOIN staff_tags t ON t.id = e.tag_id
+     WHERE e.location_id = ? AND e.active = 1
+       AND COALESCE(e.start_date,'0000-01-01') <= ? AND (e.end_date IS NULL OR e.end_date >= ?)
+     ORDER BY e.name`).all(locationId, sunday, weekMonday);
   const turns = db.prepare(
     'SELECT * FROM turns WHERE location_id = ? AND date BETWEEN ? AND ? ORDER BY date, start_min, position, id')
     .all(locationId, weekMonday, sunday);
@@ -78,7 +80,10 @@ function scheduleData(locationId, weekMonday) {
   }
   rows.sort((a, b) => a.start_min - b.start_min || a.label.localeCompare(b.label));
 
-  return { week: weekMonday, days, employees, turns, rows, closed, perEmployee,
+  const tags = db.prepare(
+    'SELECT * FROM staff_tags WHERE location_id = ? ORDER BY position, id').all(locationId);
+
+  return { week: weekMonday, days, employees, turns, rows, closed, tags, perEmployee,
            totals: { hours: totalHours, cost: totalCost },
            budget: { amount: budget, flag: budgetFlag } };
 }
@@ -93,21 +98,26 @@ module.exports = (r) => {
   r.get('/employees', checkLocation, (req, res) => {
     const today = todayStr();
     const rows = db.prepare(
-      `SELECT * FROM employees WHERE location_id = ? AND active = 1 ORDER BY name`).all(req.locationId);
+      `SELECT e.*, t.name tag_name, t.color tag_color FROM employees e
+       LEFT JOIN staff_tags t ON t.id = e.tag_id
+       WHERE e.location_id = ? AND e.active = 1 ORDER BY e.name`).all(req.locationId);
     const withFlag = rows.map(e => ({ ...e, former: e.end_date && e.end_date < today ? 1 : 0 }));
     res.json(req.query.former === '1' ? withFlag : withFlag.filter(e => !e.former));
   });
 
   r.post('/employees', checkLocation, (req, res) => {
-    const { name, position, pay_type, rate, start_date, end_date } = req.body;
+    const { name, position, pay_type, rate, start_date, end_date, tag_id } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'Name required' });
     const start = !badDate(start_date) ? start_date : todayStr();
     const end = !badDate(end_date) ? end_date : null;
     if (end && end < start) return res.status(400).json({ error: 'End date is before the start date' });
+    const tag = tag_id ? db.prepare('SELECT * FROM staff_tags WHERE id = ? AND location_id = ?')
+      .get(Number(tag_id), req.locationId) : null;
     const { lastInsertRowid } = db.prepare(
-      'INSERT INTO employees (location_id, name, position, pay_type, rate, start_date, end_date) VALUES (?,?,?,?,?,?,?)')
-      .run(req.locationId, String(name).trim(), (position || '').trim() || null,
-        pay_type === 'salary' ? 'salary' : 'hourly', num(rate), start, end);
+      `INSERT INTO employees (location_id, name, position, pay_type, rate, start_date, end_date, tag_id)
+       VALUES (?,?,?,?,?,?,?,?)`)
+      .run(req.locationId, String(name).trim(), tag ? tag.name : ((position || '').trim() || null),
+        pay_type === 'salary' ? 'salary' : 'hourly', num(rate), start, end, tag ? tag.id : null);
     res.json({ id: Number(lastInsertRowid) });
   });
 
@@ -122,11 +132,15 @@ module.exports = (r) => {
       ? (b.end_date === null || b.end_date === '' ? null : (!badDate(b.end_date) ? b.end_date : emp.end_date))
       : emp.end_date;
     if (end && start && end < start) return res.status(400).json({ error: 'End date is before the start date' });
-    db.prepare('UPDATE employees SET name=?, position=?, pay_type=?, rate=?, start_date=?, end_date=? WHERE id=?')
+    const tagId = b.tag_id !== undefined ? (b.tag_id ? Number(b.tag_id) : null) : emp.tag_id;
+    const tag = tagId ? db.prepare('SELECT * FROM staff_tags WHERE id = ? AND location_id = ?')
+      .get(tagId, req.locationId) : null;
+    db.prepare(`UPDATE employees SET name=?, position=?, pay_type=?, rate=?, start_date=?, end_date=?, tag_id=?
+      WHERE id=?`)
       .run(b.name !== undefined ? String(b.name).trim() : emp.name,
-        b.position !== undefined ? ((b.position || '').trim() || null) : emp.position,
+        tag ? tag.name : (b.position !== undefined ? ((b.position || '').trim() || null) : emp.position),
         b.pay_type !== undefined ? (b.pay_type === 'salary' ? 'salary' : 'hourly') : emp.pay_type,
-        b.rate !== undefined ? num(b.rate) : emp.rate, start, end, emp.id);
+        b.rate !== undefined ? num(b.rate) : emp.rate, start, end, tag ? tag.id : null, emp.id);
     res.json({ ok: true });
   });
 
@@ -237,6 +251,41 @@ module.exports = (r) => {
     if (!t) return res.status(404).json({ error: 'Not found' });
     db.prepare('DELETE FROM turn_assignments WHERE turn_id = ? AND employee_id = ?')
       .run(t.id, Number(req.params.employeeId));
+    res.json({ ok: true });
+  });
+
+  // ---- staff role tags ----
+  r.get('/staff-tags', checkLocation, (req, res) => {
+    res.json(db.prepare(
+      `SELECT t.*, (SELECT COUNT(*) FROM employees e WHERE e.tag_id = t.id AND e.active = 1) people
+       FROM staff_tags t WHERE t.location_id = ? ORDER BY t.position, t.id`).all(req.locationId));
+  });
+
+  r.post('/staff-tags', checkLocation, (req, res) => {
+    const name = (req.body.name || '').trim().slice(0, 30);
+    if (!name) return res.status(400).json({ error: 'Name required' });
+    const pos = db.prepare('SELECT COALESCE(MAX(position),0)+1 p FROM staff_tags WHERE location_id = ?')
+      .get(req.locationId).p;
+    const { lastInsertRowid } = db.prepare(
+      'INSERT INTO staff_tags (location_id, name, color, position) VALUES (?,?,?,?)')
+      .run(req.locationId, name, (req.body.color || '#1a7f5a').slice(0, 9), pos);
+    res.json({ id: Number(lastInsertRowid), name });
+  });
+
+  r.put('/staff-tags/:id', checkLocation, (req, res) => {
+    const tag = db.prepare('SELECT * FROM staff_tags WHERE id = ? AND location_id = ?')
+      .get(Number(req.params.id), req.locationId);
+    if (!tag) return res.status(404).json({ error: 'Not found' });
+    db.prepare('UPDATE staff_tags SET name = ?, color = ? WHERE id = ?')
+      .run(req.body.name !== undefined ? String(req.body.name).trim().slice(0, 30) || tag.name : tag.name,
+        req.body.color || tag.color, tag.id);
+    res.json({ ok: true });
+  });
+
+  r.delete('/staff-tags/:id', checkLocation, (req, res) => {
+    const id = Number(req.params.id);
+    db.prepare('UPDATE employees SET tag_id = NULL WHERE tag_id = ? AND location_id = ?').run(id, req.locationId);
+    db.prepare('DELETE FROM staff_tags WHERE id = ? AND location_id = ?').run(id, req.locationId);
     res.json({ ok: true });
   });
 

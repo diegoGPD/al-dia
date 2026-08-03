@@ -104,7 +104,9 @@
       const names = ids.map(id => {
         const e = empById[id];
         const gone = e && !activeOn(e, date);
-        return `<span class="${gone ? 'gone' : ''}">${esc(e ? e.name : '?')}</span>`;
+        const dot = e && e.tag_color
+          ? `<i class="tag-dot" style="background:${e.tag_color}" title="${esc(e.tag_name || '')}"></i>` : '';
+        return `<span class="${gone ? 'gone' : ''}">${dot}${esc(e ? e.name : '?')}</span>`;
       }).join('<br>');
       return `<td class="cell ${ids.length ? 'filled' : ''}" data-key="${esc(row.key)}" data-date="${date}"
         ${ids.length ? `style="background:${colorFor(row, rows.indexOf(row))}"` : ''}>${names || '<span class="plus">+</span>'}</td>`;
@@ -143,6 +145,11 @@
           </tbody>
         </table>
       </div>
+      ${(d.tags || []).length ? `
+      <div class="tag-legend">
+        ${d.tags.map(t => `<span class="tag-chip"><i class="tag-dot" style="background:${t.color}"></i>${esc(t.name)}</span>`).join('')}
+        <button class="btn tiny" id="manageTags">Editar etiquetas</button>
+      </div>` : `<div class="tag-legend"><button class="btn tiny" id="manageTags">+ Etiquetas de puesto</button></div>`}
       <div class="sheet-actions">
         <button class="btn tiny" id="addRow">+ Turno</button>
         <button class="btn tiny" id="copyWeek">⧉ Copiar semana pasada</button>
@@ -208,7 +215,8 @@
         ${roster.map(e => `
           <div class="list-row ${e.former ? 'former-row' : ''}" data-emp="${e.id}">
             <div><strong>${esc(e.name)}</strong>${e.former ? ' <span class="pill warn">former</span>' : ''}
-              <div class="hint">${esc(e.position || '—')} · ${e.pay_type === 'salary' ? `${money(e.rate)}/week salary` : `${money2(e.rate)}/hour`}
+              ${e.tag_name ? `<span class="tag-chip"><i class="tag-dot" style="background:${e.tag_color}"></i>${esc(e.tag_name)}</span>` : ''}
+              <div class="hint">${e.tag_name ? '' : esc(e.position || '—') + ' · '}${e.pay_type === 'salary' ? `${money(e.rate)}/week salary` : `${money2(e.rate)}/hour`}
                 · since ${e.start_date ? fmtDate(e.start_date, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}${
                 e.end_date ? ` until ${fmtDate(e.end_date, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}</div></div>
             <div class="list-right">
@@ -221,7 +229,11 @@
         <form id="empForm" class="emp-form">
           <div class="row2">
             <label>Name<input name="name" required placeholder="Ana"></label>
-            <label>Role<input name="position" placeholder="Cocina, caja, mesero…"></label>
+            <label>Puesto
+              <select name="tag_id">
+                <option value="">Sin etiqueta</option>
+                ${(sched.tags || []).map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}
+              </select></label>
           </div>
           <div class="row2">
             <label>Pay type
@@ -305,6 +317,8 @@
       });
       const ex = app.querySelector('#exportPng');
       if (ex) ex.onclick = withFlush(() => exportSchedulePng());
+      const mt = app.querySelector('#manageTags');
+      if (mt) mt.onclick = withFlush(() => tagsDialog());
     }
     bindGrid();
 
@@ -339,6 +353,7 @@
         await api(`/employees?${qLoc()}`, { method: 'POST', body: {
           location_id: state.locationId, name: f.get('name'), position: f.get('position'),
           pay_type: f.get('pay_type'), rate: Number(f.get('rate')),
+          tag_id: Number(f.get('tag_id')) || null,
           start_date: f.get('start_date'), end_date: f.get('end_date') || null } });
         toast('Employee added'); rerender();
       } catch (err) { toast(err.message, true); }
@@ -361,7 +376,9 @@
         ${eligible.map(e => `
           <label class="pick-row">
             <input type="checkbox" value="${e.id}" ${cur.includes(e.id) ? 'checked' : ''}>
-            <span>${esc(e.name)}${e.position ? ` <span class="hint">· ${esc(e.position)}</span>` : ''}</span>
+            <span>${esc(e.name)}${e.tag_name
+              ? ` <span class="tag-chip"><i class="tag-dot" style="background:${e.tag_color}"></i>${esc(e.tag_name)}</span>`
+              : (e.position ? ` <span class="hint">· ${esc(e.position)}</span>` : '')}</span>
           </label>`).join('') || '<p class="hint">Nobody on the roster works on this date.</p>'}
       </div>
       <div class="modal-actions">
@@ -386,6 +403,64 @@
           close(); render();
         } catch (err) { toast(err.message, true); }
       };
+    });
+  }
+
+  // Manage the role tags (Gerente, Cocina, Front…) shown beside names.
+  const TAG_PALETTE = ['#1a7f5a', '#2d6cdf', '#c77d1a', '#8e44ad', '#16a085', '#c0392b', '#e07a3f', '#2d3436'];
+  async function tagsDialog() {
+    const tags = await api(`/staff-tags?${qLoc()}`);
+    modal(`
+      <h3>Etiquetas de puesto</h3>
+      <div id="tagList">
+        ${tags.map(t => `
+          <div class="list-row" data-tag="${t.id}">
+            <div><span class="tag-chip"><i class="tag-dot" style="background:${t.color}"></i>${esc(t.name)}</span>
+              <div class="hint">${t.people} persona${t.people === 1 ? '' : 's'}</div></div>
+            <div class="list-right">
+              <button class="icon-btn edit-tag" aria-label="Edit">✎</button>
+              <button class="icon-btn danger del-tag" aria-label="Delete">✕</button>
+            </div>
+          </div>`).join('') || '<p class="hint">Sin etiquetas todavía.</p>'}
+      </div>
+      <form id="tagForm" style="margin-top:12px">
+        <label>Nueva etiqueta<input name="name" placeholder="Cocinero, Front, Gerente…" required></label>
+        <div class="swatches">
+          ${TAG_PALETTE.map((c, i) => `<button type="button" class="swatch ${i === 0 ? 'on' : ''}"
+            data-color="${c}" style="background:${c}"></button>`).join('')}
+        </div>
+        <button class="btn primary full" type="submit">Agregar etiqueta</button>
+      </form>
+      <div class="modal-actions"><button type="button" class="btn" data-close>Listo</button></div>`,
+    (wrap, close) => {
+      let picked = TAG_PALETTE[0];
+      wrap.querySelectorAll('.swatch').forEach(b => b.onclick = () => {
+        picked = b.dataset.color;
+        wrap.querySelectorAll('.swatch').forEach(x => x.classList.toggle('on', x === b));
+      });
+      wrap.querySelector('[data-close]').onclick = () => { close(); render(); };
+      wrap.querySelector('#tagForm').onsubmit = async ev => {
+        ev.preventDefault();
+        const name = new FormData(ev.target).get('name');
+        try {
+          await api(`/staff-tags?${qLoc()}`, { method: 'POST', body: { location_id: state.locationId, name, color: picked } });
+          close(); tagsDialog();
+        } catch (err) { toast(err.message, true); }
+      };
+      wrap.querySelectorAll('.edit-tag').forEach(b => b.onclick = async () => {
+        const row = b.closest('.list-row');
+        const t = tags.find(x => x.id === Number(row.dataset.tag));
+        const name = prompt('Nombre de la etiqueta:', t.name);
+        if (!name) return;
+        await api(`/staff-tags/${t.id}?${qLoc()}`, { method: 'PUT', body: { location_id: state.locationId, name } });
+        close(); tagsDialog();
+      });
+      wrap.querySelectorAll('.del-tag').forEach(b => b.onclick = async () => {
+        const row = b.closest('.list-row');
+        if (!confirm('¿Borrar esta etiqueta? Las personas se quedan, solo pierden la etiqueta.')) return;
+        await api(`/staff-tags/${row.dataset.tag}?${qLoc()}`, { method: 'DELETE' });
+        close(); tagsDialog();
+      });
     });
   }
 
@@ -495,7 +570,11 @@
       <h3>Edit employee</h3>
       <form id="empEdit">
         <label>Name<input name="name" value="${esc(e.name)}" required></label>
-        <label>Role<input name="position" value="${esc(e.position || '')}"></label>
+        <label>Puesto
+          <select name="tag_id">
+            <option value="">Sin etiqueta</option>
+            ${(sched.tags || []).map(t => `<option value="${t.id}" ${e.tag_id === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
+          </select></label>
         <div class="row2">
           <label>Pay type
             <select name="pay_type">
@@ -521,7 +600,8 @@
         const f = new FormData(ev.target);
         try {
           await api(`/employees/${e.id}?${qLoc()}`, { method: 'PUT', body: {
-            location_id: state.locationId, name: f.get('name'), position: f.get('position'),
+            location_id: state.locationId, name: f.get('name'),
+            tag_id: Number(f.get('tag_id')) || null,
             pay_type: f.get('pay_type'), rate: Number(f.get('rate')),
             start_date: f.get('start_date') || undefined, end_date: f.get('end_date') || null } });
           close(); toast('Saved'); render();
@@ -543,7 +623,8 @@
     const rowH = r => Math.max(46, 22 + Math.max(1, Math.max(...d.days.map(dt =>
       ((r.byDate[dt] || {}).employee_ids || []).length), 1)) * 17);
     const heights = rows.map(rowH);
-    const W = shiftW + dayW * 7, H = headH + dayHeadH + heights.reduce((a, b) => a + b, 0) + 12;
+    const legendH = (d.tags || []).length ? 30 : 0;
+    const W = shiftW + dayW * 7, H = headH + dayHeadH + heights.reduce((a, b) => a + b, 0) + 12 + legendH;
     const scale = 2;
     const cv = document.createElement('canvas');
     cv.width = W * scale; cv.height = H * scale;
@@ -588,10 +669,16 @@
         const ids = ((row.byDate[date] || {}).employee_ids) || [];
         if (closed.has(date)) { ctx.fillStyle = '#2d3436'; ctx.fillRect(x, y, dayW, h); return; }
         if (ids.length) { ctx.fillStyle = color; ctx.fillRect(x, y, dayW, h); }
-        ctx.fillStyle = '#1e2a26';
-        ctx.font = '600 13px -apple-system, Segoe UI, Roboto, sans-serif';
         ids.forEach((id, k) => {
-          ctx.fillText((empById[id]?.name || '?').slice(0, 16), x + 8, y + 22 + k * 17);
+          const e = empById[id];
+          const ty = y + 22 + k * 17;
+          if (e && e.tag_color) {
+            ctx.fillStyle = e.tag_color;
+            ctx.beginPath(); ctx.arc(x + 12, ty - 4, 4, 0, Math.PI * 2); ctx.fill();
+          }
+          ctx.fillStyle = '#1e2a26';
+          ctx.font = '600 13px -apple-system, Segoe UI, Roboto, sans-serif';
+          ctx.fillText((e?.name || '?').slice(0, 15), x + (e && e.tag_color ? 21 : 8), ty);
         });
       });
       y += h;
@@ -609,6 +696,19 @@
       ly += h;
       ctx.beginPath(); ctx.moveTo(0, ly); ctx.lineTo(W, ly); ctx.stroke();
     });
+
+    if (legendH) {
+      let lx = pad;
+      const ly2 = H - 12;
+      for (const t of d.tags) {
+        ctx.fillStyle = t.color;
+        ctx.beginPath(); ctx.arc(lx + 5, ly2 - 4, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#405048';
+        ctx.font = '600 12px -apple-system, Segoe UI, Roboto, sans-serif';
+        ctx.fillText(t.name, lx + 15, ly2);
+        lx += 22 + ctx.measureText(t.name).width;
+      }
+    }
 
     const a = document.createElement('a');
     a.download = `horario-${locName.replace(/\s+/g, '-').toLowerCase()}-${d.week}.png`;

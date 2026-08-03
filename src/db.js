@@ -351,6 +351,37 @@ if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='cha
   `);
 }
 
+// Staff role tags (Gerente, Cocina, Front…) — owner-defined, colour-coded,
+// shown beside names on the schedule.
+if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='staff_tags'`).get()) {
+  db.exec(`
+    CREATE TABLE staff_tags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      color TEXT NOT NULL DEFAULT '#1a7f5a',
+      position INTEGER NOT NULL DEFAULT 0
+    );`);
+  if (!hasColumn('employees', 'tag_id')) {
+    db.exec(`ALTER TABLE employees ADD COLUMN tag_id INTEGER REFERENCES staff_tags(id)`);
+  }
+  // Turn the roles people already typed into real tags, so nothing is re-entered.
+  const PALETTE = ['#1a7f5a', '#2d6cdf', '#c77d1a', '#8e44ad', '#16a085', '#c0392b'];
+  const rows = db.prepare(
+    `SELECT DISTINCT location_id, trim(position) p FROM employees
+     WHERE position IS NOT NULL AND trim(position) <> ''`).all();
+  const byLoc = {};
+  for (const r of rows) (byLoc[r.location_id] = byLoc[r.location_id] || []).push(r.p);
+  const insTag = db.prepare('INSERT INTO staff_tags (location_id, name, color, position) VALUES (?,?,?,?)');
+  for (const [loc, names] of Object.entries(byLoc)) {
+    names.forEach((n, i) => {
+      const id = Number(insTag.run(Number(loc), n, PALETTE[i % PALETTE.length], i).lastInsertRowid);
+      db.prepare(`UPDATE employees SET tag_id = ? WHERE location_id = ? AND trim(position) = ?`)
+        .run(id, Number(loc), n);
+    });
+  }
+}
+
 // Days the restaurant is closed — blacked out across the whole schedule grid.
 if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='closed_days'`).get()) {
   db.exec(`CREATE TABLE closed_days (
