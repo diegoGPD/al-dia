@@ -102,25 +102,58 @@ module.exports = (r) => {
   });
 
   // ---- recurring costs ----
+  // A recurring cost can only be erased from history if it never touched a
+  // period that's already been reported on: no finished day inside its own
+  // date range, and no channel reconciliation overlapping it. Otherwise past
+  // totals would silently change, so the cost is ended instead of deleted.
+  function periodLocked(locationId, it) {
+    const today = todayStr();
+    const lastApplied = it.end_date && it.end_date < today ? it.end_date : addDays(today, -1);
+    if (it.start_date <= lastApplied) {
+      return { locked: true, reason: `it already applied to closed days (${it.start_date} → ${lastApplied})` };
+    }
+    const recon = db.prepare(
+      `SELECT COUNT(*) c FROM channel_reconciliations
+        WHERE location_id = ? AND end_date >= ? AND start_date <= ?`)
+      .get(locationId, it.start_date, it.end_date || '9999-12-31').c;
+    if (recon) return { locked: true, reason: 'it falls inside a reconciled period' };
+    return { locked: false, reason: null };
+  }
+
+  // Active = no end date yet, or an end date that hasn't passed (inclusive, in
+  // America/Monterrey). Ended ones are returned separately so they can sit in
+  // their own collapsed section instead of cluttering the live list.
   r.get('/recurring', checkLocation, (req, res) => {
-    const items = db.prepare(
+    const rows = db.prepare(
       `SELECT rc.*, c.name AS category_name FROM recurring_costs rc
        JOIN recurring_cost_categories c ON c.id = rc.category_id
        WHERE rc.location_id = ? AND rc.active = 1 ORDER BY c.position, rc.description`)
       .all(req.locationId);
-    items.forEach(it => { it.daily = calc.dailyRate(it); });
-    res.json(items);
+    const today = todayStr();
+    const active = [], ended = [];
+    for (const it of rows) {
+      it.daily = calc.dailyRate(it);
+      it.ended = !!(it.end_date && it.end_date < today);
+      it.locked = periodLocked(req.locationId, it);   // drives "Delete permanently"
+      (it.ended ? ended : active).push(it);
+    }
+    ended.sort((a, b) => (b.end_date || '').localeCompare(a.end_date || ''));
+    res.json({ active, ended });
   });
 
   r.post('/recurring', requireOwner, checkLocation, (req, res) => {
-    const { category_id, description, amount, frequency, invoiced, start_date, account_id } = req.body;
+    const { category_id, description, amount, frequency, invoiced, start_date, end_date, account_id } = req.body;
     if (!category_id || !description || num(amount) <= 0 || !['weekly', 'biweekly', 'monthly'].includes(frequency))
       return res.status(400).json({ error: 'Category, description, amount and frequency are required' });
     const start = !badDate(start_date) ? start_date : todayStr();
+    // Empty / null end date = ongoing. If given, it can't be before the start.
+    const end = badDate(end_date) ? null : end_date;
+    if (end && end < start)
+      return res.status(400).json({ error: 'The end date can’t be before the start date.' });
     const { lastInsertRowid } = db.prepare(
-      `INSERT INTO recurring_costs (location_id, category_id, description, amount, frequency, invoiced, start_date, account_id)
-       VALUES (?,?,?,?,?,?,?,?)`)
-      .run(req.locationId, Number(category_id), description.trim(), num(amount), frequency, bool01(invoiced), start,
+      `INSERT INTO recurring_costs (location_id, category_id, description, amount, frequency, invoiced, start_date, end_date, account_id)
+       VALUES (?,?,?,?,?,?,?,?,?)`)
+      .run(req.locationId, Number(category_id), description.trim(), num(amount), frequency, bool01(invoiced), start, end,
         account_id ? Number(account_id) : null);
     res.json({ id: Number(lastInsertRowid) });
   });
@@ -130,6 +163,12 @@ module.exports = (r) => {
       .get(Number(req.params.id), req.locationId);
     if (!it) return res.status(404).json({ error: 'Not found' });
     const b = req.body;
+    const start = !badDate(b.start_date) ? b.start_date : it.start_date;
+    // null or '' = ongoing (the form's "Ongoing" toggle sends null).
+    const end = (b.end_date === null || b.end_date === '') ? null
+      : (!badDate(b.end_date) ? b.end_date : (b.end_date === undefined ? it.end_date : it.end_date));
+    if (end && end < start)
+      return res.status(400).json({ error: 'The end date can’t be before the start date.' });
     db.prepare(
       `UPDATE recurring_costs SET category_id=?, description=?, amount=?, frequency=?, invoiced=?, start_date=?, end_date=?, account_id=? WHERE id=?`)
       .run(
@@ -138,21 +177,49 @@ module.exports = (r) => {
         b.amount !== undefined ? num(b.amount) : it.amount,
         ['weekly', 'biweekly', 'monthly'].includes(b.frequency) ? b.frequency : it.frequency,
         b.invoiced !== undefined ? bool01(b.invoiced) : it.invoiced,
-        !badDate(b.start_date) ? b.start_date : it.start_date,
-        b.end_date === null ? null : (!badDate(b.end_date) ? b.end_date : it.end_date),
+        start, end,
         b.account_id !== undefined ? (b.account_id ? Number(b.account_id) : null) : it.account_id,
         it.id);
     res.json({ ok: true });
   });
 
+  // Two separate outcomes, never mixed up:
+  //   mode=end   (default) → stops the cost from today on; every past period
+  //                           keeps it, so no historical total moves.
+  //   mode=purge           → removes the cost entirely, allowed only when it
+  //                           never applied to a closed or reconciled period.
   r.delete('/recurring/:id', requireOwner, checkLocation, (req, res) => {
-    // "Delete" = end it today so history stays correct; never-used items are removed outright.
     const it = db.prepare('SELECT * FROM recurring_costs WHERE id = ? AND location_id = ?')
       .get(Number(req.params.id), req.locationId);
     if (!it) return res.status(404).json({ error: 'Not found' });
+    const mode = (req.body?.mode || req.query.mode || 'end').toLowerCase();
     const today = todayStr();
-    if (it.start_date >= today) db.prepare('DELETE FROM recurring_costs WHERE id = ?').run(it.id);
-    else db.prepare('UPDATE recurring_costs SET end_date = ? WHERE id = ?').run(addDays(today, -1), it.id);
+
+    if (mode === 'purge') {
+      const lock = periodLocked(req.locationId, it);
+      if (lock.locked) {
+        return res.status(409).json({
+          error: `“${it.description}” can’t be deleted permanently because ${lock.reason}. End it instead — past periods keep it and future ones stop.`,
+          canEnd: true
+        });
+      }
+      db.prepare('DELETE FROM recurring_costs WHERE id = ?').run(it.id);
+      return res.json({ ok: true, mode: 'purge' });
+    }
+
+    // End today: today is the last day it counts (inclusive), so tomorrow on
+    // it no longer spreads. Past periods are untouched.
+    const end = today >= it.start_date ? today : it.start_date;
+    db.prepare('UPDATE recurring_costs SET end_date = ? WHERE id = ?').run(end, it.id);
+    res.json({ ok: true, mode: 'end', end_date: end });
+  });
+
+  // Undo an ending: put the cost back on the active list, ongoing again.
+  r.post('/recurring/:id/resume', requireOwner, checkLocation, (req, res) => {
+    const it = db.prepare('SELECT * FROM recurring_costs WHERE id = ? AND location_id = ?')
+      .get(Number(req.params.id), req.locationId);
+    if (!it) return res.status(404).json({ error: 'Not found' });
+    db.prepare('UPDATE recurring_costs SET end_date = NULL WHERE id = ?').run(it.id);
     res.json({ ok: true });
   });
 

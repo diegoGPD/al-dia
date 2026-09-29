@@ -87,6 +87,25 @@ Managers: the owner resets it from **Settings → People → ✎**. For the owne
 node scripts/reset-password.js you@email.com newpassword123
 ```
 
+## Which location an order belongs to
+Every PideDirecto order is filed by the **restaurant ID inside the order itself**, matched against the location's Restaurant ID in *Settings → POS webhook → PideDirecto*. Nothing else is ever used — not the webhook URL, not the location you happen to be viewing, not the order's name. PideDirecto allows a single webhook URL for all restaurants, so the URL says nothing about who sent the order.
+
+An order whose restaurant ID matches no location is saved with **no location** and listed under *Unassigned orders*; it counts in nobody's sales until you either set that ID on a location or assign the batch there. One restaurant ID can belong to only one location (enforced in the database).
+
+To re-file orders that were stored before this rule existed:
+```
+node scripts/fix-order-locations.js               # dry run — shows exactly what would move
+node scripts/fix-order-locations.js --fetch-ids   # first ask PideDirecto for missing restaurant IDs
+node scripts/fix-order-locations.js --apply       # do it
+```
+It only changes `location_id` — amounts, dates and channels are never touched — and writes every move to `pd_order_location_fixes`. The same tool is in *Settings → POS webhook → Re-check every stored order's location*.
+
+## Recurring costs: ending vs deleting
+A recurring cost spreads per day between its start date and its end date, both included (America/Monterrey). Leave the end date empty for "ongoing".
+
+- **End it** — sets the end date to today. Past days, weeks and months keep the cost, so no historical total moves; it simply stops counting tomorrow. Ended costs move to the collapsed *Ended costs* section and can be resumed with ↻.
+- **Delete permanently** — removes the cost outright. Only offered when it never applied to a closed day or a reconciled period, because otherwise past numbers would silently change.
+
 ## Break-even math
 Break-even sales = fixed costs ÷ (1 − variable-cost ratio). Fixed costs are your recurring costs (daily equivalents) plus one-offs for the period; the variable ratio comes from your actual logged data, falling back to category defaults until you have real numbers.
 

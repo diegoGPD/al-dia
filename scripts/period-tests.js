@@ -125,5 +125,59 @@ console.log('== a period still running stops at today; finished ones do not ==')
   chk('future month unclamped', future.end, effectiveEnd(future, today));
 }
 
+// ---------- end-dated recurring costs (Fix 3) ----------
+console.log('== a cost ending mid-month: day sums = week sums = month sum ==');
+{
+  // A second location so the fixture above keeps its exact expected numbers.
+  const l2 = createLocation('EndDate fixture');
+  const cat = db.prepare(
+    `SELECT id FROM recurring_cost_categories WHERE location_id = ? AND name = 'Rent'`).get(l2).id;
+  // 3100/month, live 2026-03-01 → 2026-03-15 inclusive (15 days).
+  db.prepare(`INSERT INTO recurring_costs (location_id, category_id, description, amount, frequency, invoiced, start_date, end_date)
+    VALUES (?,?,?,?,?,0,?,?)`).run(l2, cat, 'Ends mid-month', 3100, 'monthly', '2026-03-01', '2026-03-15');
+
+  const mb = periodBounds('month', '2026-03-15');
+  const month = calc.summary(l2, mb.start, mb.end).costs.recurring;
+  chk('month = 15 daily slices, not 31', 15 * RENT_DAY, month);
+
+  let daySum = 0;
+  for (let d = mb.start; d <= mb.end; d = addDays(d, 1)) daySum += calc.summary(l2, d, d).costs.recurring;
+  chk('sum of the 31 days = month', month, daySum);
+
+  let weekSum = 0;
+  for (let d = mb.start; d <= mb.end;) {
+    const wb = periodBounds('week', d);
+    const s = wb.start < mb.start ? mb.start : wb.start;
+    const e = wb.end > mb.end ? mb.end : wb.end;
+    weekSum += calc.summary(l2, s, e).costs.recurring;
+    d = addDays(wb.end, 1);
+  }
+  chk('sum of the clipped weeks = month', month, weekSum);
+
+  chk('day 15 (last live day) counts', RENT_DAY, calc.summary(l2, '2026-03-15', '2026-03-15').costs.recurring);
+  chk('day 16 (after the end) is zero', 0, calc.summary(l2, '2026-03-16', '2026-03-16').costs.recurring);
+  chk('April is zero', 0, calc.summary(l2, '2026-04-01', '2026-04-30').costs.recurring);
+  chk('day 1 (start, inclusive) counts', RENT_DAY, calc.summary(l2, '2026-03-01', '2026-03-01').costs.recurring);
+  chk('period consistency holds', true, calc.verifyPeriodConsistency(l2, mb.start, mb.end).ok);
+}
+
+console.log('== ending a cost never changes a past period ==');
+{
+  const l3 = createLocation('Ending fixture');
+  const cat = db.prepare(
+    `SELECT id FROM recurring_cost_categories WHERE location_id = ? AND name = 'Rent'`).get(l3).id;
+  const { lastInsertRowid } = db.prepare(
+    `INSERT INTO recurring_costs (location_id, category_id, description, amount, frequency, invoiced, start_date)
+     VALUES (?,?,?,?,?,0,?)`).run(l3, cat, 'Ongoing then ended', 3100, 'monthly', '2026-01-01');
+  const before = calc.summary(l3, '2026-03-01', '2026-03-31').costs.recurring;
+  // End it today, exactly like the "End" action does.
+  db.prepare('UPDATE recurring_costs SET end_date = ? WHERE id = ?').run(todayStr(), Number(lastInsertRowid));
+  const after = calc.summary(l3, '2026-03-01', '2026-03-31').costs.recurring;
+  chk('March unchanged after ending today', before, after);
+  chk('March is a full 31 slices', 31 * RENT_DAY, after);
+  const future = addDays(todayStr(), 1);
+  chk('the day after the end is zero', 0, calc.summary(l3, future, future).costs.recurring);
+}
+
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PERIOD TESTS PASSED');
 process.exit(failures ? 1 : 0);

@@ -351,6 +351,76 @@ if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='cha
   `);
 }
 
+// An order's location must come from the restaurant id in its payload and
+// nothing else. That means pd_orders.location_id has to accept NULL (unknown
+// restaurant -> parked as unassigned) and pd_store_id must be unique so two
+// locations can never claim the same restaurant.
+if (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='pd_orders'`).get()
+    && /location_id INTEGER NOT NULL/.test(db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='pd_orders'`).get().sql)) {
+  db.exec('PRAGMA foreign_keys = OFF;');
+  db.exec(`
+    CREATE TABLE pd_orders_new (
+      order_id TEXT PRIMARY KEY,
+      location_id INTEGER REFERENCES locations(id) ON DELETE CASCADE,
+      date TEXT NOT NULL,
+      channel TEXT,
+      payment_method TEXT,
+      amount REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'OTHER',
+      source TEXT NOT NULL DEFAULT 'webhook',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      store_id TEXT
+    );
+    INSERT INTO pd_orders_new (order_id, location_id, date, channel, payment_method, amount, status, source, updated_at)
+      SELECT order_id, location_id, date, channel, payment_method, amount, status, source, updated_at FROM pd_orders;
+    DROP TABLE pd_orders;
+    ALTER TABLE pd_orders_new RENAME TO pd_orders;
+    CREATE INDEX idx_pd_orders_loc_date ON pd_orders(location_id, date);
+    CREATE INDEX idx_pd_orders_store ON pd_orders(store_id);
+  `);
+  db.exec('PRAGMA foreign_keys = ON;');
+}
+if (!hasColumn('pd_orders', 'store_id')) {
+  db.exec(`ALTER TABLE pd_orders ADD COLUMN store_id TEXT;
+           CREATE INDEX IF NOT EXISTS idx_pd_orders_store ON pd_orders(store_id);`);
+}
+// One restaurant id belongs to exactly one location. If two locations were
+// sharing one id (which by itself makes routing ambiguous), keep it on the
+// location that already holds the most orders for it and clear the others,
+// loudly — otherwise the unique index below would fail and the app wouldn't boot.
+for (const dup of db.prepare(
+  `SELECT pd_store_id FROM locations WHERE pd_store_id IS NOT NULL
+    GROUP BY pd_store_id HAVING COUNT(*) > 1`).all()) {
+  const holders = db.prepare(
+    `SELECT l.id, l.name,
+            (SELECT COUNT(*) FROM pd_orders o WHERE o.location_id = l.id) AS orders
+       FROM locations l WHERE l.pd_store_id = ? ORDER BY orders DESC, l.id ASC`).all(dup.pd_store_id);
+  const keep = holders[0];
+  for (const h of holders.slice(1)) {
+    db.prepare('UPDATE locations SET pd_store_id = NULL WHERE id = ?').run(h.id);
+    console.warn(`[al-dia] PideDirecto restaurant id ${dup.pd_store_id} was on both "${keep.name}" and "${h.name}". Kept it on "${keep.name}"; cleared it from "${h.name}" — set the correct id for that location in Settings.`);
+  }
+}
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_pd_store
+         ON locations(pd_store_id) WHERE pd_store_id IS NOT NULL;`);
+
+// Audit trail for the location-repair script: every order it moves.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pd_order_location_fixes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT NOT NULL,
+    old_location_id INTEGER,
+    old_location TEXT,
+    new_location_id INTEGER,
+    new_location TEXT,
+    order_date TEXT,
+    amount REAL,
+    changed_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_pd_fixes_changed ON pd_order_location_fixes(changed_at);
+`);
+
 // Staff role tags (Gerente, Cocina, Front…) — owner-defined, colour-coded,
 // shown beside names on the schedule.
 if (!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='staff_tags'`).get()) {

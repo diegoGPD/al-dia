@@ -113,8 +113,48 @@ function staffRoutes(r) {
 
   r.post('/webhooks/pd-config', requireOwner, checkLocation, (req, res) => {
     const id = (req.body.pd_store_id || '').trim() || null;
+    // A restaurant id can belong to only one location — otherwise routing by it
+    // would be ambiguous and orders could land in the wrong place again.
+    if (id) {
+      const clash = db.prepare('SELECT name FROM locations WHERE pd_store_id = ? AND id <> ?')
+        .get(id, req.locationId);
+      if (clash) return res.status(409).json({ error: `That PideDirecto restaurant ID is already assigned to ${clash.name}. Each restaurant ID can belong to only one location.` });
+    }
     db.prepare('UPDATE locations SET pd_store_id = ? WHERE id = ?').run(id, req.locationId);
     res.json({ ok: true, ...pd.statusFor(req.locationId) });
+  });
+
+  // ---- orders we refused to guess a location for ----
+  r.get('/webhooks/pd-unassigned', requireOwner, (req, res) => {
+    res.json(pd.unassignedOrders());
+  });
+
+  // Claim a restaurant id (and its parked orders) for the current location.
+  r.post('/webhooks/pd-claim', requireOwner, checkLocation, (req, res) => {
+    const r2 = pd.claimStore(req.locationId, req.body.store_id);
+    if (r2.reason) return res.status(409).json({ error: r2.reason });
+    res.json({ ok: true, ...r2, ...pd.statusFor(req.locationId) });
+  });
+
+  // Recompute location for every stored order from its own restaurant id.
+  // Dry run unless the caller explicitly confirms.
+  r.post('/webhooks/pd-repair-locations', requireOwner, async (req, res) => {
+    const apply = req.body?.apply === true && req.body?.confirm === 'APPLY';
+    try {
+      // Orders can only be judged by a restaurant id we actually have, so
+      // recover the missing ones first (free, from the stored deliveries).
+      const recovered = pd.backfillStoreIdsFromEvents();
+      let fetched = null;
+      if (req.body?.fetchIds === true) fetched = await pd.fetchMissingStoreIds(500);
+      const out = pd.repairOrderLocations({ dryRun: !apply });
+      if (out.changes) out.changes = out.changes.slice(0, 500);
+      res.json({ ...out, recovered, fetched });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  r.get('/webhooks/pd-repair-log', requireOwner, (req, res) => {
+    res.json(db.prepare(
+      `SELECT * FROM pd_order_location_fixes ORDER BY id DESC LIMIT 500`).all());
   });
 
   r.post('/webhooks/pd-reconcile', requireOwner, checkLocation, async (req, res) => {

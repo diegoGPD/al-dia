@@ -193,13 +193,27 @@ function buildMapping(locationId) {
 }
 
 // ---------- ledger + day rebuild ----------
+// The ONLY way an order gets a location: its own restaurant id, matched
+// against locations.pd_store_id. No name matching, no "current" location, no
+// default — an unrecognised restaurant is parked as unassigned for review.
+// Matches on any location, active or not: the restaurant id is unique, so it
+// identifies one location unambiguously, and an order should never be filed
+// somewhere else just because its restaurant was temporarily deactivated.
+function resolveLocation(storeId) {
+  if (!storeId) return null;
+  const row = db.prepare(
+    'SELECT id FROM locations WHERE pd_store_id = ?').get(String(storeId).trim());
+  return row ? row.id : null;
+}
+
 function upsertOrder(locationId, o, source) {
-  db.prepare(`INSERT INTO pd_orders (order_id, location_id, date, channel, payment_method, amount, status, source, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,datetime('now'))
+  db.prepare(`INSERT INTO pd_orders (order_id, location_id, date, channel, payment_method, amount, status, source, store_id, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))
     ON CONFLICT (order_id) DO UPDATE SET
-      date = excluded.date, channel = excluded.channel, payment_method = excluded.payment_method,
-      amount = excluded.amount, status = excluded.status, updated_at = datetime('now')`)
-    .run(o.orderId, locationId, o.date, o.channel, o.paymentMethod, o.amount, o.status, source);
+      location_id = excluded.location_id, date = excluded.date, channel = excluded.channel,
+      payment_method = excluded.payment_method, amount = excluded.amount, status = excluded.status,
+      store_id = COALESCE(excluded.store_id, pd_orders.store_id), updated_at = datetime('now')`)
+    .run(o.orderId, locationId, o.date, o.channel, o.paymentMethod, o.amount, o.status, source, o.storeId || null);
 }
 
 // Rebuild one day's revenue entry from all COMPLETE orders in the ledger.
@@ -251,7 +265,12 @@ function rebuildDay(locationId, date) {
 // ---------- webhook entry point ----------
 // Live payloads are thin notifications ({orderId, storeId, eventType,
 // occurredAt}) — the money fields come from a getOrder call.
-async function processWebhook(locationId, payload) {
+// NOTE: `tokenLocationId` is the location that owns the webhook URL. It is used
+// ONLY to file the raw event for inspection. It never decides where the order
+// goes: PideDirecto exposes a single webhook URL for every restaurant, so the
+// token says nothing about which restaurant sent the order. The order's own
+// storeId decides, or it stays unassigned.
+async function processWebhook(tokenLocationId, payload) {
   let o = extractOrder(payload);
   if (!o) return { status: 'stored', note: 'PideDirecto-like payload without orderId — stored for inspection' };
 
@@ -272,6 +291,19 @@ async function processWebhook(locationId, payload) {
     }
   } else if (o.amount <= 0 && !apiKeyPresent()) {
     enrichNote = ' ⚠ webhook carries no amount and PIDEDIRECTO_API_KEY is not set — cannot fetch order details.';
+  }
+
+  const locationId = resolveLocation(o.storeId);
+  if (locationId === null) {
+    // Never guess. Park it with no location so it shows up under Unassigned
+    // orders and can be claimed once the restaurant id is configured.
+    upsertOrder(null, o, 'webhook');
+    return {
+      status: 'unassigned',
+      note: o.storeId
+        ? `Order ${o.orderId.slice(0, 8)}… saved as UNASSIGNED — restaurant id ${String(o.storeId).slice(0, 12)}… doesn't match any location. Add it to a location in Settings → PideDirecto, then re-assign from Settings → Unassigned orders.`
+        : `Order ${o.orderId.slice(0, 8)}… saved as UNASSIGNED — the payload carries no restaurant id.`
+    };
   }
 
   upsertOrder(locationId, o, 'webhook');
@@ -342,11 +374,24 @@ async function backfillRange(locationId, startIso, endIso) {
     'SELECT id, name FROM revenue_categories WHERE location_id = ?').all(locationId).map(c => [c.id, c.name]));
   const dates = new Set();
   const byChannel = {}; // classification report
-  let seen = 0;
+  let seen = 0, foreign = 0, unassigned = 0;
   for (const raw of orders) {
     const o = extractOrder(raw);
     if (!o) continue;
-    upsertOrder(locationId, o, 'backfill');
+    // Route each order by its own restaurant id, exactly like the webhook. The
+    // query was filtered to this location's restaurant id, so an order that
+    // came back without one belongs to that same id by construction; anything
+    // carrying a different id is filed where it really belongs, never here.
+    const storeId = o.storeId || loc.pd_store_id;
+    const ownerId = resolveLocation(storeId);
+    if (ownerId === null) { upsertOrder(null, { ...o, storeId }, 'backfill'); unassigned++; seen++; continue; }
+    if (ownerId !== locationId) {
+      upsertOrder(ownerId, { ...o, storeId }, 'backfill');
+      feedInsert(ownerId, o, raw);
+      if (o.status === 'COMPLETE') rebuildDay(ownerId, o.date);
+      foreign++; seen++; continue;
+    }
+    upsertOrder(locationId, { ...o, storeId }, 'backfill');
     feedInsert(locationId, o, raw);
     if (o.status === 'COMPLETE') {
       const catId = categoryFor(o.channel, o.paymentMethod);
@@ -361,7 +406,7 @@ async function backfillRange(locationId, startIso, endIso) {
   }
   for (const d of dates) rebuildDay(locationId, d);
   return {
-    skipped: false, orders: seen, daysRebuilt: dates.size,
+    skipped: false, orders: seen, daysRebuilt: dates.size, foreign, unassigned,
     report: Object.entries(byChannel)
       .sort((a, b) => b[1].amount - a[1].amount)
       .map(([k, v]) => ({ group: k, count: v.count, amount: Math.round(v.amount * 100) / 100, classified: v.classified })),
@@ -406,7 +451,181 @@ function statusFor(locationId) {
   };
 }
 
+// ---------- unassigned orders (admin review) ----------
+// Orders whose restaurant id matched no location. They are never guessed into a
+// location; the owner either configures the id or assigns them by hand.
+function unassignedOrders(limit = 200) {
+  const rows = db.prepare(
+    `SELECT order_id, store_id, date, channel, payment_method, amount, status, source, updated_at
+       FROM pd_orders WHERE location_id IS NULL
+      ORDER BY date DESC, updated_at DESC LIMIT ?`).all(limit);
+  const groups = {};
+  for (const r of rows) {
+    const k = r.store_id || '(no restaurant id)';
+    const g = groups[k] = groups[k] || { storeId: r.store_id, count: 0, amount: 0, firstDate: r.date, lastDate: r.date };
+    g.count++;
+    if (r.status === 'COMPLETE') g.amount += r.amount;
+    if (r.date < g.firstDate) g.firstDate = r.date;
+    if (r.date > g.lastDate) g.lastDate = r.date;
+  }
+  return {
+    total: db.prepare('SELECT COUNT(*) c FROM pd_orders WHERE location_id IS NULL').get().c,
+    groups: Object.values(groups).sort((a, b) => b.count - a.count),
+    orders: rows
+  };
+}
+
+// Claim every unassigned order carrying `storeId` for a location, and record
+// the restaurant id on that location so future orders route themselves.
+function claimStore(locationId, storeId) {
+  const sid = String(storeId || '').trim();
+  if (!sid) return { moved: 0, reason: 'no restaurant id given' };
+  const clash = db.prepare(
+    'SELECT id, name FROM locations WHERE pd_store_id = ? AND id <> ?').get(sid, locationId);
+  if (clash) return { moved: 0, reason: `restaurant id already belongs to ${clash.name}` };
+  const own = db.prepare('SELECT pd_store_id, name FROM locations WHERE id = ?').get(locationId);
+  // One location = one restaurant. Refuse to silently replace a configured id,
+  // which would orphan every order already routed by it.
+  if (own?.pd_store_id && String(own.pd_store_id).trim() !== sid) {
+    return { moved: 0, reason: `${own.name} is already set to restaurant id ${String(own.pd_store_id).slice(0, 12)}… — clear it first, or assign this one to another location` };
+  }
+  const rows = db.prepare(
+    'SELECT order_id, date, status FROM pd_orders WHERE location_id IS NULL AND store_id = ?').all(sid);
+  db.exec('BEGIN');
+  try {
+    db.prepare('UPDATE locations SET pd_store_id = ? WHERE id = ?').run(sid, locationId);
+    db.prepare('UPDATE pd_orders SET location_id = ?, updated_at = datetime(\'now\') WHERE location_id IS NULL AND store_id = ?')
+      .run(locationId, sid);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  const dates = [...new Set(rows.filter(r => r.status === 'COMPLETE').map(r => r.date))];
+  for (const d of dates) rebuildDay(locationId, d);
+  return { moved: rows.length, daysRebuilt: dates.length };
+}
+
+// ---------- recovering the restaurant id for orders stored before we kept it ----------
+// Offline and free: every webhook delivery is kept verbatim in pos_events, and
+// those payloads carry the restaurant id. Only fills blanks — never overwrites.
+function backfillStoreIdsFromEvents() {
+  const events = db.prepare('SELECT payload FROM pos_events ORDER BY id').all();
+  const upd = db.prepare(
+    'UPDATE pd_orders SET store_id = ? WHERE order_id = ? AND store_id IS NULL');
+  let filled = 0, scanned = 0;
+  for (const e of events) {
+    let p; try { p = JSON.parse(e.payload); } catch { continue; }
+    const o = extractOrder(p && typeof p === 'object' ? p : {});
+    if (!o || !o.storeId) continue;
+    scanned++;
+    if (upd.run(String(o.storeId).trim(), o.orderId).changes) filled++;
+  }
+  return { events: events.length, withStoreId: scanned, filled };
+}
+
+// The complete but slow path: ask PideDirecto for each order still missing its
+// restaurant id. Read-only against their API; writes nothing but store_id.
+async function fetchMissingStoreIds(limit = 300) {
+  if (!apiKeyPresent()) return { skipped: true, reason: 'no API key configured' };
+  const rows = db.prepare(
+    `SELECT order_id FROM pd_orders WHERE store_id IS NULL ORDER BY date DESC LIMIT ?`).all(limit);
+  const upd = db.prepare('UPDATE pd_orders SET store_id = ? WHERE order_id = ?');
+  let filled = 0, failed = 0;
+  for (const r of rows) {
+    try {
+      const raw = await pdApi('getOrder', { orderId: r.order_id });
+      const o = extractOrder(raw && typeof raw === 'object' ? raw : {});
+      if (o && o.storeId) { upd.run(String(o.storeId).trim(), r.order_id); filled++; }
+      else failed++;
+    } catch { failed++; }
+  }
+  const left = db.prepare('SELECT COUNT(*) c FROM pd_orders WHERE store_id IS NULL').get().c;
+  return { skipped: false, tried: rows.length, filled, failed, stillMissing: left };
+}
+
+// ---------- one-time repair of historically mis-routed orders ----------
+// Recomputes location_id for EVERY stored order from its own restaurant id.
+// Nothing is deleted and no amounts change — only location_id moves.
+// dryRun (default) reports what would change and touches nothing.
+function repairOrderLocations({ dryRun = true } = {}) {
+  const locs = db.prepare('SELECT id, name, pd_store_id FROM locations').all();
+  const nameOf = id => (locs.find(l => l.id === id)?.name || (id === null ? 'unassigned' : `location ${id}`));
+  const byStore = new Map(locs.filter(l => l.pd_store_id).map(l => [String(l.pd_store_id).trim(), l.id]));
+
+  const orders = db.prepare(
+    `SELECT order_id, location_id, store_id, date, amount, status FROM pd_orders`).all();
+  const moves = new Map();          // "from → to" -> stats
+  const changes = [];               // per-order log
+  let noStoreId = 0;
+
+  for (const o of orders) {
+    const sid = o.store_id ? String(o.store_id).trim() : null;
+    // No restaurant id stored → we cannot know where it belongs. Leave it
+    // exactly as it is rather than guessing or blanking it.
+    if (!sid) { noStoreId++; continue; }
+    const target = byStore.has(sid) ? byStore.get(sid) : null;
+    if (target === o.location_id) continue;
+    const key = `${nameOf(o.location_id)} → ${nameOf(target)}`;
+    const m = moves.get(key) || { from: nameOf(o.location_id), to: nameOf(target), count: 0, sales: 0, firstDate: o.date, lastDate: o.date };
+    m.count++;
+    if (o.status === 'COMPLETE') m.sales += o.amount;
+    if (o.date < m.firstDate) m.firstDate = o.date;
+    if (o.date > m.lastDate) m.lastDate = o.date;
+    moves.set(key, m);
+    changes.push({ order_id: o.order_id, old_location: nameOf(o.location_id), new_location: nameOf(target),
+                   old_location_id: o.location_id, new_location_id: target, date: o.date, amount: o.amount, status: o.status });
+  }
+
+  // Orders that would LEAVE a location because their restaurant id isn't set on
+  // any location yet. Correct (we never guess) but it lowers that location's
+  // reported sales, so configure the ids first and re-run instead.
+  const toUnassigned = changes.filter(c => c.new_location_id === null && c.old_location_id !== null);
+  const unknownStoreIds = [...new Set(orders
+    .filter(o => o.store_id && !byStore.has(String(o.store_id).trim()))
+    .map(o => String(o.store_id).trim()))];
+
+  const summary = {
+    dryRun, scanned: orders.length, wouldChange: changes.length, noStoreId,
+    toUnassigned: toUnassigned.length,
+    toUnassignedSales: Math.round(toUnassigned.reduce((s, c) => s + (c.status === 'COMPLETE' ? c.amount : 0), 0) * 100) / 100,
+    unknownStoreIds,
+    moves: [...moves.values()].sort((a, b) => b.count - a.count),
+    locations: locs.map(l => ({ id: l.id, name: l.name, storeId: l.pd_store_id || null }))
+  };
+  if (dryRun) return { ...summary, changes };
+
+  const stamp = new Date().toISOString();
+  const touchedDays = new Set();
+  db.exec('BEGIN');
+  try {
+    const upd = db.prepare('UPDATE pd_orders SET location_id = ?, updated_at = datetime(\'now\') WHERE order_id = ?');
+    const log = db.prepare(`INSERT INTO pd_order_location_fixes
+      (order_id, old_location_id, old_location, new_location_id, new_location, order_date, amount, changed_at)
+      VALUES (?,?,?,?,?,?,?,?)`);
+    for (const c of changes) {
+      upd.run(c.new_location_id, c.order_id);
+      log.run(c.order_id, c.old_location_id, c.old_location, c.new_location_id, c.new_location, c.date, c.amount, stamp);
+      if (c.status === 'COMPLETE') {
+        if (c.old_location_id !== null) touchedDays.add(`${c.old_location_id}|${c.date}`);
+        if (c.new_location_id !== null) touchedDays.add(`${c.new_location_id}|${c.date}`);
+      }
+    }
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+
+  // Re-derive the affected days on both sides so revenue follows the orders.
+  // A day that was logged by hand is never overwritten — it's reported instead.
+  const skippedDays = [];
+  for (const k of touchedDays) {
+    const [lid, date] = k.split('|');
+    const r = rebuildDay(Number(lid), date);
+    if (r.skipped) skippedDays.push({ location: nameOf(Number(lid)), date, reason: r.reason });
+  }
+  return { ...summary, applied: changes.length, daysRebuilt: touchedDays.size - skippedDays.length,
+           skippedDays, changedAt: stamp };
+}
+
 module.exports = {
   looksLikePideDirecto, processWebhook, reconcileLocation, backfillRange,
-  startReconciler, statusFor, ratesView, applyRealRates, rebuildDay
+  startReconciler, statusFor, ratesView, applyRealRates, rebuildDay,
+  resolveLocation, unassignedOrders, claimStore, repairOrderLocations,
+  backfillStoreIdsFromEvents, fetchMissingStoreIds
 };

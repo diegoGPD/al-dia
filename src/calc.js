@@ -520,6 +520,6 @@ function verifyPeriodConsistency(locationId, start, end) {
 
 module.exports = {
   summary, breakEven, trend, benchmarks, verifyPeriodConsistency,
-  dailyRate, recurringForRange, accountsView,
+  dailyRate, overlapDays, recurringForRange, accountsView,
   laborForRange, laborMaps, reconciliationAdjustment
 };

@@ -385,6 +385,11 @@ strong.neg { color: var(--red); }
 .sched-actions { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
 .emp-form { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 10px; }
 .btn.danger-btn { color: var(--red); border-color: var(--red); }
+.btn[disabled] { opacity: .5; pointer-events: none; }
+/* stacked choices in a dialog (end vs delete), and ended/inactive rows */
+.stack { display: grid; gap: 6px; }
+.stack .hint { margin: 0 0 6px; }
+.list-row.muted { opacity: .7; }
 details.card > summary { padding: 0; margin-bottom: 0; }
 details[open].card > summary { margin-bottom: 12px; }
 

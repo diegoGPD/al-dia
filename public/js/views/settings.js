@@ -88,13 +88,41 @@
   }
 
   async function posSection() {
-    const [info, pdInfo, pdRates, feed] = await Promise.all([
+    const [info, pdInfo, pdRates, feed, unass] = await Promise.all([
       api(`/webhooks/pos-info?${qLoc()}`),
       api(`/webhooks/pd-status?${qLoc()}`),
       api(`/webhooks/pd-rates?${qLoc()}`),
-      api('/external/feed-token')
+      api('/external/feed-token'),
+      api('/webhooks/pd-unassigned')
     ]);
-    const badge = { processed: 'good', stored: 'warn', error: 'bad', tracked: '' };
+    const badge = { processed: 'good', stored: 'warn', error: 'bad', tracked: '', unassigned: 'warn' };
+    // Orders whose restaurant ID matched no location. Nothing is guessed — the
+    // owner either configures the ID here or assigns the batch by hand.
+    const unassignedBlock = `
+      <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:12px">
+        <strong>Unassigned orders</strong>
+        ${unass.total ? `
+          <div class="be-row" style="margin-top:6px"><span>Orders with no location</span>
+            <span class="pill warn">${unass.total}</span></div>
+          <p class="hint">These arrived with a PideDirecto restaurant ID that doesn't match any location, so they were parked instead of guessed. They are <strong>not</strong> counted in any location's sales.</p>
+          ${unass.groups.map(g => `
+            <div class="list-row">
+              <div><strong style="word-break:break-all">${esc(g.storeId || 'no restaurant ID in the payload')}</strong>
+                <div class="hint">${g.count} order${g.count === 1 ? '' : 's'} · ${g.firstDate} → ${g.lastDate} · ${money(g.amount)} completed sales</div></div>
+              <div class="list-right">${g.storeId
+                ? `<button class="btn tiny pd-claim" data-store="${esc(g.storeId)}">Assign to this location</button>`
+                : '<span class="hint">can\'t be assigned automatically</span>'}</div>
+            </div>`).join('')}
+        ` : '<div class="hint" style="margin-top:6px">None — every order matched a location by its restaurant ID.</div>'}
+        <details style="margin-top:10px"><summary class="hint">Re-check every stored order's location</summary>
+          <p class="hint">Recomputes the location of every order from the restaurant ID saved with it. Nothing is deleted and no amount changes — only which location an order belongs to. It shows you exactly what would move before anything happens.</p>
+          <div class="quick-actions">
+            <button class="btn tiny" id="pdRepairDry">🔍 Dry run (changes nothing)</button>
+            <button class="btn tiny" id="pdRepairFetch">🔎 Dry run + ask PideDirecto for missing IDs</button>
+          </div>
+          <div id="pdRepairOut"></div>
+        </details>
+      </div>`;
     const pdBlock = `
       <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:12px">
         <strong>PideDirecto</strong>
@@ -103,10 +131,11 @@
         <div class="be-row"><span>Completed orders today / total tracked</span>
           <strong>${pdInfo.ordersToday} / ${pdInfo.totalOrders}</strong></div>
         <form id="pdForm" class="row2" style="margin-top:6px">
-          <label>Store ID (this location)
+          <label>Restaurant ID (this location)
             <input name="pd_store_id" value="${esc(pdInfo.storeId || '')}" placeholder="77185c4a-1ccd-48e9-…"></label>
           <button class="btn primary" type="submit" style="align-self:end">Save</button>
         </form>
+        <div class="hint">Every order is filed by the restaurant ID inside it — one ID per location, never by the webhook URL, so both restaurants can share the single URL PideDirecto allows.</div>
         <div class="quick-actions" style="margin-top:8px">
           <button class="btn tiny" id="pdReconcile">↻ Reconcile last 3 days</button>
           <button class="btn tiny" id="pdBackfill">⏪ Backfill July 1 → today</button>
@@ -121,6 +150,7 @@
           <button class="btn primary" id="pdApplyRates" style="margin-top:8px">Set all channels to the real rates</button>
           <div class="hint">Writes the real rates onto your sales channels (editable any time under "Your categories"). After changing rates, use "Recalculate past commissions" above so history matches.</div>
         </details>
+        ${unassignedBlock}
         <div class="hint">Orders arriving on the webhook above log themselves (completed orders only; cancellations reverse automatically, retries never double-count). POS orders with a payment method I can't classify (not cash/card/BanRegio) are counted in totals but flagged — never guessed. The reconciler also runs every 6 hours.</div>
         <details style="margin-top:10px"><summary class="hint">Kitchen feed (external read-only API)</summary>
           <p class="hint">For a local server that polls for new delivery-app orders (Uber Eats, Rappi, Didi Food only —
@@ -336,9 +366,56 @@
         };
         app.querySelector('#pdForm').onsubmit = async (e) => {
           e.preventDefault();
-          await api(`/webhooks/pd-config?${qLoc()}`, { method: 'POST', body: {
-            location_id: state.locationId, pd_store_id: new FormData(e.target).get('pd_store_id') } });
-          toast('PideDirecto store saved'); render();
+          try {
+            await api(`/webhooks/pd-config?${qLoc()}`, { method: 'POST', body: {
+              location_id: state.locationId, pd_store_id: new FormData(e.target).get('pd_store_id') } });
+            toast('Restaurant ID saved'); render();
+          } catch (err) { toast(err.message, true); }
+        };
+
+        app.querySelectorAll('.pd-claim').forEach(b => b.onclick = async () => {
+          const sid = b.dataset.store;
+          if (!confirm(`Assign restaurant ID ${sid} — and every parked order carrying it — to this location?`)) return;
+          try {
+            const r = await api(`/webhooks/pd-claim?${qLoc()}`, { method: 'POST', body: { location_id: state.locationId, store_id: sid } });
+            toast(`${r.moved} orders assigned`); render();
+          } catch (err) { toast(err.message, true); }
+        });
+
+        // Dry run first, always. Applying is a second, explicit click.
+        const repairOut = app.querySelector('#pdRepairOut');
+        const runRepair = async (apply, fetchIds) => {
+          try {
+            const r = await api('/webhooks/pd-repair-locations', { method: 'POST',
+              body: apply ? { apply: true, confirm: 'APPLY' } : { fetchIds: !!fetchIds } });
+            const movesHtml = r.moves.length ? r.moves.map(m => `
+              <div class="bd-row"><div class="bd-name">${esc(m.from)} → ${esc(m.to)}</div>
+                <div class="bd-amt">${money(m.sales)}</div>
+                <div class="bd-inv hint">${m.count} orders · ${m.firstDate} → ${m.lastDate}</div></div>`).join('')
+              : '<div class="hint">Every order is already filed under the location its restaurant ID points to.</div>';
+            repairOut.innerHTML = `<div class="card" style="margin-top:8px">
+              <div class="card-title">${apply ? `Moved ${r.applied} orders` : `Would move ${r.wouldChange} of ${r.scanned} orders`}</div>
+              ${movesHtml}
+              ${r.toUnassigned ? `<div class="hint neg"><strong>⚠ ${r.toUnassigned} orders (${money(r.toUnassignedSales)}) would leave their location and become unassigned</strong>, because the restaurant ID they carry isn't set on any location — that would lower that location's reported sales. Set these IDs on the right location first, then run this again:<br>${r.unknownStoreIds.map(s => `<code>${esc(s)}</code>`).join('<br>')}</div>` : ''}
+              ${r.recovered?.filled ? `<div class="hint">Recovered the restaurant ID of ${r.recovered.filled} older orders from the stored webhook deliveries.</div>` : ''}
+              ${r.fetched && !r.fetched.skipped ? `<div class="hint">Asked PideDirecto about ${r.fetched.tried} orders: ${r.fetched.filled} IDs recovered, ${r.fetched.stillMissing} still unknown.</div>` : ''}
+              ${r.noStoreId ? `<div class="hint">${r.noStoreId} older orders have no restaurant ID saved, so they were left exactly where they are — nothing was guessed.${r.fetched ? '' : ' Try the second button to ask PideDirecto for their IDs.'}</div>` : ''}
+              ${(r.skippedDays || []).length ? `<div class="hint">⚠ ${r.skippedDays.length} day(s) kept their manual numbers: ${r.skippedDays.map(d => `${esc(d.location)} ${d.date}`).join(', ')}</div>` : ''}
+              ${!apply && r.wouldChange ? `<button class="btn danger-btn" id="pdRepairApply" style="margin-top:8px">Apply these ${r.wouldChange} changes</button>
+                <div class="hint">Only location changes. Order amounts, dates and channels stay as they are, and every move is written to an audit log.</div>` : ''}
+            </div>`;
+            const applyBtn = repairOut.querySelector('#pdRepairApply');
+            if (applyBtn) applyBtn.onclick = async () => {
+              if (!confirm(`Reassign ${r.wouldChange} orders to the location their restaurant ID points to? Sales totals for the affected days will be recalculated on both sides.`)) return;
+              await runRepair(true);
+              toast('Locations repaired');
+            };
+          } catch (err) { toast(err.message, true); }
+        };
+        app.querySelector('#pdRepairDry').onclick = () => runRepair(false, false);
+        app.querySelector('#pdRepairFetch').onclick = (e) => {
+          e.target.disabled = true; e.target.textContent = 'Asking PideDirecto…';
+          runRepair(false, true).finally(() => { e.target.disabled = false; e.target.textContent = '🔎 Dry run + ask PideDirecto for missing IDs'; });
         };
         const showPdReport = (r) => {
           if (r.skipped) { toast(`Skipped: ${r.reason}`, true); return; }

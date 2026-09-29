@@ -209,7 +209,9 @@ function accountProjection(locationId, horizonDays) {
     for (const it of db.prepare(
       `SELECT * FROM recurring_costs WHERE location_id = ? AND active = 1 AND account_id = ?`)
       .all(locationId, a.id)) {
-      recForAccount += calc.dailyRate(it) * 28;
+      // Only the days it was actually live in the window — a cost that ended
+      // mid-window must not be projected as if it were still running.
+      recForAccount += calc.dailyRate(it) * calc.overlapDays(it, start, end);
     }
     const dailyNet = (inRow + trIn - outVar - outOne - trOut - recForAccount) / 28;
     return { id: a.id, name: a.name, balance: a.balance,

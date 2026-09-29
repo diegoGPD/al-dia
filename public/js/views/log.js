@@ -329,11 +329,17 @@
   // ======================================================================
   registerRoute('recurring', async () => {
     if (!isOwner()) return '<div class="card">Only the owner can manage recurring costs.</div>';
-    const [items, cats] = await Promise.all([
+    const [recs, cats] = await Promise.all([
       api(`/recurring?${qLoc()}`), api(`/categories?${qLoc()}`)
     ]);
+    const items = recs.active || [], ended = recs.ended || [];
     const dailyTotal = items.reduce((s, i) => s + i.daily, 0);
     const FREQ = { weekly: 'Weekly', biweekly: 'Every 2 weeks', monthly: 'Monthly' };
+    const dShort = d => fmtDate(d, { month: 'short', day: 'numeric', year: 'numeric' });
+    const recData = i => esc(JSON.stringify({ id: i.id, category_id: i.category_id,
+      description: i.description, amount: i.amount, frequency: i.frequency, invoiced: i.invoiced,
+      account_id: i.account_id, start_date: i.start_date, end_date: i.end_date || null,
+      locked: !!(i.locked && i.locked.locked), lockReason: i.locked ? i.locked.reason : null }));
     return `
       <h2 class="page-title">Recurring costs</h2>
       <div class="card highlight">
@@ -365,42 +371,122 @@
           <label>Starts counting from
             <input type="date" name="start_date" value="${today()}" required></label>
         </div>
+        <label class="inv-toggle big"><input type="checkbox" name="ongoing" id="recOngoing" checked>Ongoing (no end date)</label>
+        <label id="recEndWrap" style="display:none">Last day it counts
+          <input type="date" name="end_date">
+          <span class="hint">Counts through this day, included. A monthly cost ending on the 15th only counts days 1–15.</span></label>
         <label class="inv-toggle big"><input type="checkbox" name="invoiced">Invoiced (facturado)</label>
         <button class="btn primary full" type="submit">Add recurring cost</button>
       </form>
       ${items.length ? `<div class="card">
         <div class="card-title">Current recurring costs</div>
         ${items.map(i => `
-          <div class="list-row" data-rec='${esc(JSON.stringify({ id: i.id, category_id: i.category_id, description: i.description, amount: i.amount, frequency: i.frequency, invoiced: i.invoiced, account_id: i.account_id, start_date: i.start_date }))}'>
+          <div class="list-row" data-rec='${recData(i)}'>
             <div><strong>${esc(i.description)}</strong>
-              <div class="hint">${esc(i.category_name)} · ${FREQ[i.frequency]} · ${i.invoiced ? 'Invoiced' : 'Not invoiced'} · since ${fmtDate(i.start_date, { month: 'short', day: 'numeric', year: 'numeric' })}</div></div>
+              <div class="hint">${esc(i.category_name)} · ${FREQ[i.frequency]} · ${i.invoiced ? 'Invoiced' : 'Not invoiced'} · since ${dShort(i.start_date)}${i.end_date ? ` · ends ${dShort(i.end_date)}` : ''}</div></div>
             <div class="list-right">${money(i.amount)}<div class="hint">${money(i.daily)}/day</div>
               <button class="icon-btn edit-rec" aria-label="Edit">✎</button>
-              <button class="icon-btn danger del-rec" data-id="${i.id}" aria-label="End">✕</button></div>
+              <button class="icon-btn danger del-rec" data-id="${i.id}" aria-label="End or delete">✕</button></div>
           </div>`).join('')}
-        <div class="hint">Deleting ends the cost from today — your past numbers stay correct.</div>
+        <div class="hint">✕ lets you <strong>end</strong> a cost (past periods keep it, future ones stop) or delete it permanently when it never counted anywhere.</div>
+      </div>` : ''}
+      ${ended.length ? `<div class="card">
+        <button class="btn full" id="endedToggle" type="button" aria-expanded="false">
+          Ended costs (${ended.length}) ▾</button>
+        <div id="endedList" style="display:none;margin-top:10px">
+          ${ended.map(i => `
+            <div class="list-row muted" data-rec='${recData(i)}'>
+              <div><strong>${esc(i.description)}</strong>
+                <div class="hint">${esc(i.category_name)} · ${FREQ[i.frequency]} · ${dShort(i.start_date)} → ${dShort(i.end_date)}</div></div>
+              <div class="list-right">${money(i.amount)}<div class="hint">ended</div>
+                <button class="icon-btn edit-rec" aria-label="Edit">✎</button>
+                <button class="icon-btn resume-rec" data-id="${i.id}" aria-label="Resume" title="Make it ongoing again">↻</button></div>
+            </div>`).join('')}
+          <div class="hint">These still count in every period up to their end date — that's why your past numbers didn't change.</div>
+        </div>
       </div>` : ''}`;
   });
 
+  // "Ongoing" hides the end-date field; unchecking reveals it.
+  function bindOngoing(scope, toggleSel, wrapSel, dateSel) {
+    const t = scope.querySelector(toggleSel), w = scope.querySelector(wrapSel);
+    if (!t || !w) return;
+    const sync = () => {
+      w.style.display = t.checked ? 'none' : '';
+      if (t.checked) { const d = scope.querySelector(dateSel); if (d) d.value = ''; }
+    };
+    t.onchange = sync; sync();
+  }
+
   registerRoute('recurring_bind', (app) => {
     const form = app.querySelector('#recForm');
+    bindOngoing(app, '#recOngoing', '#recEndWrap', '#recForm [name=end_date]');
     if (form) form.onsubmit = async (e) => {
       e.preventDefault();
       const f = new FormData(e.target);
+      const start = f.get('start_date') || today();
+      const end = f.get('ongoing') === 'on' ? null : (f.get('end_date') || null);
+      if (end && end < start) return toast('The end date can’t be before the start date.', true);
       try {
         await api('/recurring', { method: 'POST', body: {
           location_id: state.locationId, category_id: Number(f.get('category_id')),
           description: f.get('description'), amount: Number(f.get('amount')),
           frequency: f.get('frequency'), invoiced: f.get('invoiced') === 'on',
           account_id: Number(f.get('account_id')) || null,
-          start_date: f.get('start_date') || today() } });
+          start_date: start, end_date: end } });
         toast('Recurring cost added'); render();
       } catch (err) { toast(err.message, true); }
     };
-    app.querySelectorAll('.del-rec').forEach(b => b.onclick = async () => {
-      if (!confirm('End this recurring cost? Past periods keep it; from today it stops counting.')) return;
-      await api(`/recurring/${b.dataset.id}?${qLoc()}`, { method: 'DELETE' });
-      toast('Ended'); render();
+
+    const endedToggle = app.querySelector('#endedToggle');
+    if (endedToggle) endedToggle.onclick = () => {
+      const list = app.querySelector('#endedList');
+      const open = list.style.display === 'none';
+      list.style.display = open ? '' : 'none';
+      endedToggle.setAttribute('aria-expanded', String(open));
+      endedToggle.textContent = endedToggle.textContent.replace(open ? '▾' : '▴', open ? '▴' : '▾');
+    };
+
+    app.querySelectorAll('.resume-rec').forEach(b => b.onclick = async () => {
+      try {
+        await api(`/recurring/${b.dataset.id}/resume?${qLoc()}`, { method: 'POST', body: { location_id: state.locationId } });
+        toast('Active again'); render();
+      } catch (err) { toast(err.message, true); }
+    });
+
+    // Two clearly separate outcomes — ending never touches history, deleting
+    // permanently is only offered when nothing in the past used the cost.
+    app.querySelectorAll('.del-rec').forEach(b => b.onclick = () => {
+      const it = JSON.parse(b.closest('.list-row').dataset.rec);
+      modal(`
+        <h3>${esc(it.description)}</h3>
+        <p class="hint">What do you want to do with this cost?</p>
+        <div class="stack">
+          <button class="btn primary full" id="recEnd">End it (recommended)</button>
+          <p class="hint">Stops counting after today. Every past day, week and month keeps it, so none of your history changes.</p>
+          <button class="btn danger-btn full" id="recPurge" ${it.locked ? 'disabled' : ''}>Delete permanently</button>
+          <p class="hint">${it.locked
+            ? `Not available — ${esc(it.lockReason || 'it already applied to a closed period')}.`
+            : 'Removes the cost and anything it generated. Only possible because it never counted in a closed period.'}</p>
+        </div>
+        <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button></div>`,
+      (wrap, close) => {
+        wrap.querySelector('[data-close]').onclick = close;
+        wrap.querySelector('#recEnd').onclick = async () => {
+          try {
+            const r = await api(`/recurring/${it.id}?${qLoc()}`, { method: 'DELETE', body: { location_id: state.locationId, mode: 'end' } });
+            close(); toast(`Ended — counts through ${r.end_date}`); render();
+          } catch (err) { toast(err.message, true); }
+        };
+        const purge = wrap.querySelector('#recPurge');
+        if (purge && !it.locked) purge.onclick = async () => {
+          if (!confirm(`Delete “${it.description}” permanently? This can't be undone.`)) return;
+          try {
+            await api(`/recurring/${it.id}?${qLoc()}`, { method: 'DELETE', body: { location_id: state.locationId, mode: 'purge' } });
+            close(); toast('Deleted'); render();
+          } catch (err) { toast(err.message, true); }
+        };
+      });
     });
     app.querySelectorAll('.edit-rec').forEach(b => b.onclick = async () => {
       const it = JSON.parse(b.closest('.list-row').dataset.rec);
@@ -427,6 +513,10 @@
                 ${cats.accounts.map(a => `<option value="${a.id}" ${it.account_id === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
             <label>Starts counting from<input type="date" name="start_date" value="${it.start_date}" required></label>
           </div>
+          <label class="inv-toggle big"><input type="checkbox" name="ongoing" id="recEditOngoing" ${it.end_date ? '' : 'checked'}>Ongoing (no end date)</label>
+          <label id="recEditEndWrap" style="display:none">Last day it counts
+            <input type="date" name="end_date" value="${it.end_date || ''}">
+            <span class="hint">Counts through this day, included — a monthly cost ending on the 15th only counts days 1–15.</span></label>
           <label class="inv-toggle big"><input type="checkbox" name="invoiced" ${it.invoiced ? 'checked' : ''}>Invoiced (facturado)</label>
           <p class="hint">Changing the start date rewrites this cost's history — every past day from that date counts it.</p>
           <div class="modal-actions">
@@ -435,16 +525,20 @@
           </div>
         </form>`, (wrap, close) => {
         wrap.querySelector('[data-close]').onclick = close;
+        bindOngoing(wrap, '#recEditOngoing', '#recEditEndWrap', '[name=end_date]');
         wrap.querySelector('#recEdit').onsubmit = async e => {
           e.preventDefault();
           const f = new FormData(e.target);
+          const start = f.get('start_date');
+          const end = f.get('ongoing') === 'on' ? null : (f.get('end_date') || null);
+          if (end && end < start) return toast('The end date can’t be before the start date.', true);
           try {
             await api(`/recurring/${it.id}?${qLoc()}`, { method: 'PUT', body: {
               location_id: state.locationId, category_id: Number(f.get('category_id')),
               description: f.get('description'), amount: Number(f.get('amount')),
               frequency: f.get('frequency'), invoiced: f.get('invoiced') === 'on',
               account_id: Number(f.get('account_id')) || null,
-              start_date: f.get('start_date') } });
+              start_date: start, end_date: end } });
             close(); toast('Saved'); render();
           } catch (err) { toast(err.message, true); }
         };

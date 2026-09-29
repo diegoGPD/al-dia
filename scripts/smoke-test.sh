@@ -139,9 +139,36 @@ chk "goals" 200 "$(curl -s $C -X PUT $B/goals -d '{"location_id":1,"type":"profi
 chk "recalc" 200 "$(curl -s $C -X POST "$B/admin/recalc-commissions?location=1" -d '{"location_id":1}' -o /dev/null -w '%{http_code}')"
 chk "import" 200 "$(curl -s $C -X POST "$B/import?location=1" -d '{"location_id":1,"type":"revenue","rows":[{"date":"2026-01-02","total":"100"}]}' -o /dev/null -w '%{http_code}')"
 
+echo "== recurring costs: end date, ending, deleting =="
+RCAT=$(curl -s $C "$B/categories?location=1" | python3 -c 'import json,sys;print(json.load(sys.stdin)["recurring"][0]["id"])')
+REC=$(curl -s $C -X POST "$B/recurring?location=1" -d "{\"location_id\":1,\"category_id\":$RCAT,\"description\":\"Smoke rent\",\"amount\":3000,\"frequency\":\"monthly\",\"start_date\":\"2026-01-01\",\"end_date\":\"2026-01-15\"}")
+RID=$(echo "$REC" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
+chk "created with end date" "True" "$([ -n "$RID" ] && echo True)"
+chk "end before start rejected" 400 "$(curl -s $C -X POST "$B/recurring?location=1" -d "{\"location_id\":1,\"category_id\":$RCAT,\"description\":\"Bad\",\"amount\":10,\"frequency\":\"monthly\",\"start_date\":\"2026-02-10\",\"end_date\":\"2026-02-01\"}" -o /dev/null -w '%{http_code}')"
+chk "ended costs are listed apart" "True" "$(curl -s $C "$B/recurring?location=1" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(any(i["description"]=="Smoke rent" for i in d["ended"]))')"
+chk "and not among the active ones" "False" "$(curl -s $C "$B/recurring?location=1" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(any(i["description"]=="Smoke rent" for i in d["active"]))')"
+chk "purge refused once it applied" 409 "$(curl -s $C -X DELETE "$B/recurring/$RID?location=1" -d '{"location_id":1,"mode":"purge"}' -o /dev/null -w '%{http_code}')"
+chk "resume brings it back" 200 "$(curl -s $C -X POST "$B/recurring/$RID/resume?location=1" -d '{"location_id":1}' -o /dev/null -w '%{http_code}')"
+chk "active again" "True" "$(curl -s $C "$B/recurring?location=1" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(any(i["description"]=="Smoke rent" for i in d["active"]))')"
+chk "end it" 200 "$(curl -s $C -X DELETE "$B/recurring/$RID?location=1" -d '{"location_id":1,"mode":"end"}' -o /dev/null -w '%{http_code}')"
+FUT=$(curl -s $C -X POST "$B/recurring?location=1" -d "{\"location_id\":1,\"category_id\":$RCAT,\"description\":\"Future only\",\"amount\":500,\"frequency\":\"monthly\",\"start_date\":\"2099-01-01\"}" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
+chk "never-applied cost can be purged" 200 "$(curl -s $C -X DELETE "$B/recurring/$FUT?location=1" -d '{"location_id":1,"mode":"purge"}' -o /dev/null -w '%{http_code}')"
+chk "and it is really gone" "False" "$(curl -s $C "$B/recurring?location=1" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(any(i["description"]=="Future only" for i in d["active"]+d["ended"]))')"
+
+echo "== order routing endpoints =="
+chk "unassigned list" 200 "$(curl -s $C "$B/webhooks/pd-unassigned" -o /dev/null -w '%{http_code}')"
+chk "repair dry run" "True" "$(curl -s $C -X POST "$B/webhooks/pd-repair-locations" -d '{}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["dryRun"])')"
+chk "apply needs confirmation" "True" "$(curl -s $C -X POST "$B/webhooks/pd-repair-locations" -d '{"apply":true}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["dryRun"])')"
+chk "restaurant id saves" 200 "$(curl -s $C -X POST "$B/webhooks/pd-config?location=1" -d '{"location_id":1,"pd_store_id":"smoke-store-1"}' -o /dev/null -w '%{http_code}')"
+chk "re-saving the same id is fine" 200 "$(curl -s $C -X POST "$B/webhooks/pd-config?location=1" -d '{"location_id":1,"pd_store_id":"smoke-store-1"}' -o /dev/null -w '%{http_code}')"
+
 echo "== period aggregation regression =="
 node scripts/period-tests.js >/tmp/period-out.txt 2>&1 || FAIL=1
 chk "period tests" "PASS" "$(grep -q 'ALL PERIOD TESTS PASSED' /tmp/period-out.txt && echo PASS || echo FAIL)"
+
+echo "== order routing regression =="
+node scripts/routing-tests.js >/tmp/routing-out.txt 2>&1 || FAIL=1
+chk "routing tests" "PASS" "$(grep -q 'ALL ROUTING TESTS PASSED' /tmp/routing-out.txt && echo PASS || echo FAIL)"
 
 echo
 if [ $FAIL -eq 0 ]; then echo "ALL TESTS PASSED"; else echo "FAILURES PRESENT"; exit 1; fi
