@@ -50,7 +50,12 @@ function publicRoutes(r) {
     const customer = loyalty.customerByCode(req.params.code);
     if (!customer) return res.status(404).json({ error: 'Not found' });
     try { res.redirect(await gwallet.saveLink(customer, loyalty.stateOf(customer))); }
-    catch (e) { console.error('gpay link:', e.message); res.status(500).json({ error: 'Google Wallet error' }); }
+    catch (e) {
+      // Show what Google actually said — a generic "error" here cost real
+      // debugging time when the class couldn't be created.
+      console.error('gpay link:', e.message);
+      res.status(500).json({ error: `Google Wallet error: ${e.message}` });
+    }
   });
 
   // ---- Apple PassKit web service (spec-defined paths & auth) ----

@@ -72,19 +72,42 @@ function loyaltyObject(customer, state) {
   };
 }
 
+// The class is the template every card points at. Google refuses to save a
+// card whose class doesn't exist, so this must actually succeed — and it is
+// only remembered when it did. Caching a failure here used to make the app
+// stop retrying for the life of the process, which hid the real error.
 let classEnsured = false;
+const LOGO_URL = () => `${process.env.BASE_URL || 'https://al-dia-production.up.railway.app'}/icon-192.png`;
+
 async function ensureClass(state) {
   if (classEnsured) return;
   const token = await accessToken();
   const res = await gapi('GET', `/loyaltyClass/${classId()}`, null, token);
-  if (res.status === 404) {
-    await gapi('POST', '/loyaltyClass', {
-      id: classId(), issuerName: state.programName, programName: state.programName,
-      programLogo: { sourceUri: { uri: 'https://al-dia-production.up.railway.app/icon-192.png' } },
-      reviewStatus: 'UNDER_REVIEW',
-      hexBackgroundColor: '#1a7f5a',
-      countryCode: 'MX'
-    }, token);
+  if (res.ok) { classEnsured = true; return; }
+  if (res.status !== 404) {
+    throw new Error(`Google Wallet class lookup failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  }
+  const body = {
+    id: classId(),
+    issuerName: state.programName,
+    programName: state.programName,
+    programLogo: { sourceUri: { uri: LOGO_URL() } },
+    reviewStatus: 'UNDER_REVIEW',
+    hexBackgroundColor: '#1a7f5a',
+    countryCode: 'MX'
+  };
+  let created = await gapi('POST', '/loyaltyClass', body, token);
+  if (!created.ok) {
+    // A logo Google can't fetch is the usual reason an insert is rejected;
+    // the card works without one, so rather than fail outright, try again
+    // plain and report what Google said if that fails too.
+    const first = (await created.text()).slice(0, 300);
+    delete body.programLogo;
+    created = await gapi('POST', '/loyaltyClass', body, token);
+    if (!created.ok) {
+      throw new Error(`Google Wallet class creation failed (${created.status}): ${first} | without logo: ${(await created.text()).slice(0, 300)}`);
+    }
+    console.warn('Google Wallet: class created without a logo —', first);
   }
   classEnsured = true;
 }

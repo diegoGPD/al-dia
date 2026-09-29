@@ -3,3 +3,11 @@ data/
 .env
 *.log
 .DS_Store
+# Wallet signing material — private keys and service-account keys.
+# NEVER commit these; they let anyone issue passes in your name.
+wallet-secrets/
+*.p12
+*.pfx
+*.key
+*.cer
+*.pem
