@@ -7,6 +7,12 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1); // Railway/other proxies: honor X-Forwarded-Proto
 app.use(express.json({ limit: '10mb' })); // receipt photos ride in JSON
+// The staff scanner needs the camera. Without this header some browsers deny
+// getUserMedia outright, and it also keeps the permission scoped to our origin.
+app.use((req, res, next) => {
+  res.setHeader('Permissions-Policy', 'camera=(self), microphone=()');
+  next();
+});
 
 app.use('/api', api);
 app.use(require('./src/loyalty/pages')); // public: /loyalty/join, /card/:code, /loyalty/qr

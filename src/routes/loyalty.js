@@ -139,11 +139,15 @@ function staffRoutes(r) {
     res.json(result);
   });
 
+  // Staff hand over one named reward (the drink and the burrito are separate).
   r.post('/loyalty/redeem', checkLocation, (req, res) => {
     const customer = loyalty.customerByCode(req.body.code);
     if (!customer) return res.status(404).json({ error: 'Card not recognized' });
-    const result = loyalty.redeem(customer, req.locationId);
-    if (result.ok) notifyCard(customer, result.state, '¡Recompensa canjeada! Gracias por tu visita.');
+    const result = loyalty.redeem(customer, req.locationId, req.body.reward_id || null);
+    if (result.ok) {
+      notifyCard(customer, result.state,
+        `canjeaste tu ${result.redeemed.name} — ¡gracias por venir!`);
+    }
     res.json(result);
   });
 
