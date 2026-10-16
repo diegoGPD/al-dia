@@ -123,11 +123,18 @@ function staffRoutes(r) {
   r.post('/loyalty/visit', checkLocation, (req, res) => {
     const customer = loyalty.customerByCode(req.body.code);
     if (!customer) return res.status(404).json({ error: 'Card not recognized' });
-    const result = loyalty.addVisit(customer, req.locationId);
+    const result = loyalty.addVisit(customer, req.locationId, { override: req.body.override === true });
     if (result.ok) {
-      notifyCard(customer, result.state, result.justEarned
-        ? `🎁 ¡Ganaste ${result.state.rewardText}! Canjéala cuando quieras.`
-        : `Sello agregado — ${result.state.toNext} para tu recompensa.`);
+      // justEarned is a list of rewards crossed on this visit — [] is truthy,
+      // so it must be tested by length or every visit claims a prize.
+      const won = result.justEarned.length
+        ? `🎁 ¡ganaste tu ${result.justEarned.map(r => r.name).join(' y ')}!`
+        : result.state.toNext === 1
+          ? `sello agregado — te falta 1 para tu ${result.state.nextReward.name}`
+          : result.state.nextReward
+            ? `sello agregado — faltan ${result.state.toNext} para tu ${result.state.nextReward.name}`
+            : 'sello agregado';
+      notifyCard(customer, result.state, won);
     }
     res.json(result);
   });

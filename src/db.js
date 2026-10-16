@@ -181,6 +181,29 @@ CREATE TABLE IF NOT EXISTS loyalty_redemptions (
   redeemed_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Milestone rewards: visit 5 earns a drink, visit 10 a burrito. Editable, but
+-- these are the defaults. position orders them on the card.
+CREATE TABLE IF NOT EXISTS loyalty_rewards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  milestone INTEGER NOT NULL,          -- visits needed, within one card cycle
+  name TEXT NOT NULL,                  -- shown to the customer: "bebida"
+  icon TEXT NOT NULL,                  -- art key: 'drink' | 'burrito'
+  active INTEGER NOT NULL DEFAULT 1
+);
+
+-- A reward a customer has actually earned. Rewards are granted as rows rather
+-- than derived from the visit count, so that resetting the card after the last
+-- reward can never silently swallow an earlier one the customer never claimed.
+CREATE TABLE IF NOT EXISTS loyalty_reward_grants (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  reward_id INTEGER NOT NULL REFERENCES loyalty_rewards(id) ON DELETE CASCADE,
+  earned_at TEXT NOT NULL DEFAULT (datetime('now')),
+  redeemed_at TEXT,
+  redeemed_location_id INTEGER REFERENCES locations(id)
+);
+CREATE INDEX IF NOT EXISTS idx_grants_customer ON loyalty_reward_grants(customer_id);
+
 -- Apple Wallet device registrations (PassKit web service protocol)
 CREATE TABLE IF NOT EXISTS wallet_registrations (
   device_id TEXT NOT NULL,
@@ -404,6 +427,26 @@ for (const dup of db.prepare(
 }
 db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_pd_store
          ON locations(pd_store_id) WHERE pd_store_id IS NOT NULL;`);
+
+// The stamp card runs in cycles: it empties after the final reward is redeemed.
+// The boundary is the id of the last visit on the finished card, NOT a
+// timestamp — two visits can share a second, and a reset must never swallow a
+// stamp earned in that same second (or keep one that belonged to the old card).
+// NULL means "no card has been completed yet", so every visit counts.
+if (!hasColumn('customers', 'cycle_from_visit_id')) {
+  db.exec(`ALTER TABLE customers ADD COLUMN cycle_from_visit_id INTEGER`);
+}
+// Which reward a redemption was for (legacy rows predate per-reward tracking).
+if (!hasColumn('loyalty_redemptions', 'reward_id')) {
+  db.exec(`ALTER TABLE loyalty_redemptions ADD COLUMN reward_id INTEGER`);
+}
+// Seed the two default rewards once.
+if (!db.prepare('SELECT COUNT(*) c FROM loyalty_rewards').get().c) {
+  db.prepare(`INSERT INTO loyalty_rewards (milestone, name, icon) VALUES (?,?,?)`).run(5, 'bebida', 'drink');
+  db.prepare(`INSERT INTO loyalty_rewards (milestone, name, icon) VALUES (?,?,?)`).run(10, 'burrito', 'burrito');
+  // The card is a 10-slot grid; keep the old stamps_needed in step with it.
+  db.prepare(`UPDATE loyalty_config SET stamps_needed = 10 WHERE id = 1`).run();
+}
 
 // Audit trail for the location-repair script: every order it moves.
 db.exec(`
