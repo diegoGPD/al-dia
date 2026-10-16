@@ -15,7 +15,7 @@ const path = require('node:path');
 const { readPng, writePng, cropAlpha, resize, solid, compose } = require('./lib/png');
 
 const BRAND = path.join(__dirname, '..', 'assets', 'brand');
-const OUT = path.join(__dirname, '..', 'public', 'card');
+const OUT = path.join(__dirname, '..', 'public', 'cardart');
 
 // Brand tokens — from the card design, used everywhere.
 const ORANGE = [0xEC, 0x56, 0x2B];

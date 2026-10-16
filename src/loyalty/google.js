@@ -64,7 +64,7 @@ function loyaltyObject(customer, state) {
   // Same pre-rendered grid Apple uses, at Google's 3:1 ratio. The ?v= is the
   // stamp count: Google caches hero images hard, so a changing URL is the only
   // reliable way to make the card actually redraw after a visit.
-  const hero = `${BASE()}/card/hero-${Math.max(0, Math.min(10, state.stamps || 0))}.png?v=${state.stamps}`;
+  const hero = `${BASE()}/cardart/hero-${Math.max(0, Math.min(10, state.stamps || 0))}.png?v=${state.stamps}`;
   return {
     id: objectId(customer.code),
     classId: classId(),

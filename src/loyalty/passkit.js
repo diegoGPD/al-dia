@@ -82,7 +82,7 @@ function importP12(p12Base64, password) {
 const GREEN = [26, 127, 90];
 // Pre-rendered brand art (public/card). Returns null if the build step hasn't
 // run, so a pass still goes out with the old placeholder rather than failing.
-const CARD_DIR = path.join(__dirname, '..', '..', 'public', 'card');
+const CARD_DIR = path.join(__dirname, '..', '..', 'public', 'cardart');
 function cardArt(name) {
   const p = path.join(CARD_DIR, name);
   return fs.existsSync(p) ? fs.readFileSync(p) : null;
