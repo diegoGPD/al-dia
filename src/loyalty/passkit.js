@@ -80,15 +80,39 @@ function importP12(p12Base64, password) {
 }
 
 const GREEN = [26, 127, 90];
+// Pre-rendered brand art (public/card). Returns null if the build step hasn't
+// run, so a pass still goes out with the old placeholder rather than failing.
+const CARD_DIR = path.join(__dirname, '..', '..', 'public', 'card');
+function cardArt(name) {
+  const p = path.join(CARD_DIR, name);
+  return fs.existsSync(p) ? fs.readFileSync(p) : null;
+}
+const gridFile = (state, density) =>
+  `grid-${Math.max(0, Math.min(state.stampsNeeded || 10, state.stamps || 0))}${density}.png`;
+
 function image(name, w, h) {
   const custom = path.join(IMG_DIR, name);
   if (fs.existsSync(custom)) return fs.readFileSync(custom);
   return solidPng(w, h, GREEN);
 }
 
+// bugo bogo brand. The orange is the pass background; everything written on it
+// is cream.
+const BRAND = {
+  orange: 'rgb(236,86,43)',
+  cream: 'rgb(253,254,239)',
+  creamDim: 'rgb(253,254,239)'
+};
+
 function passJson(customer, state, baseUrl) {
-  const rewardReady = state.rewardsAvailable > 0;
+  const owed = state.pending && state.pending.length ? state.pending : [];
   const { passTypeId, teamId } = getIds();
+  const hint = owed.length
+    ? `🎁 ya ganaste tu ${owed.map(p => p.name).join(' y ')}`
+    : state.nextReward
+      ? `faltan ${state.toNext} para tu ${state.nextReward.name}`
+      : 'tarjeta completa';
+
   return {
     formatVersion: 1,
     passTypeIdentifier: passTypeId,
@@ -96,10 +120,10 @@ function passJson(customer, state, baseUrl) {
     serialNumber: customer.code,
     organizationName: state.programName,
     description: `${state.programName} — tarjeta de lealtad`,
-    logoText: state.programName,
-    foregroundColor: 'rgb(255,255,255)',
-    backgroundColor: 'rgb(26,127,90)',
-    labelColor: 'rgb(220,240,232)',
+    // No logoText: the logo image carries the wordmark in the brand font.
+    foregroundColor: BRAND.cream,
+    backgroundColor: BRAND.orange,
+    labelColor: BRAND.cream,
     webServiceURL: `${baseUrl}/api/passes`,
     authenticationToken: customer.auth_token,
     barcodes: [{
@@ -109,28 +133,25 @@ function passJson(customer, state, baseUrl) {
       altText: customer.code
     }],
     storeCard: {
-      headerFields: [{
-        key: 'stamps', label: 'SELLOS',
-        value: `${state.stamps}/${state.stampsNeeded}`,
-        changeMessage: 'Sellos: %@'
-      }],
-      primaryFields: [{
-        key: 'status',
-        label: rewardReady ? 'RECOMPENSA LISTA' : 'PRÓXIMA RECOMPENSA',
-        value: rewardReady
-          ? `🎁 ${state.rewardText} — ¡canjéala!`
-          : `${state.toNext} visita${state.toNext === 1 ? '' : 's'} para: ${state.rewardText}`,
-        changeMessage: '%@'
-      }],
+      // No primaryFields on purpose: on a store card the primary field is drawn
+      // on top of the strip, and the strip IS the stamp grid.
+      headerFields: [],
+      primaryFields: [],
       secondaryFields: [
-        { key: 'name', label: 'CLIENTE', value: state.name },
-        { key: 'visits', label: 'VISITAS', value: String(state.visits) }
+        { key: 'visits', label: 'visitas',
+          value: String(state.stamps).padStart(2, '0'),
+          changeMessage: 'visitas: %@' }
+      ],
+      auxiliaryFields: [
+        { key: 'next', label: '', value: hint, changeMessage: '%@' }
       ],
       backFields: [
-        { key: 'how', label: 'Cómo funciona',
-          value: `Muestra este código en caja en cada visita. Cada ${state.stampsNeeded} sellos: ${state.rewardText}.` },
-        { key: 'privacy', label: 'Tus datos',
-          value: `Solo guardamos tu nombre y contacto para el programa. Puedes borrar tus datos cuando quieras en ${baseUrl}/card/${customer.code}` }
+        { key: 'mejor2', label: 'bugo bogo', value: 'mejor 2' },
+        { key: 'how', label: 'cómo funciona',
+          value: 'muestra este código en caja en cada visita. ' +
+            (state.rewards || []).map(r => `a la ${r.milestone} te toca ${r.name}`).join(', ') + '.' },
+        { key: 'privacy', label: 'tus datos',
+          value: `solo guardamos tu nombre y contacto para el programa. puedes borrar tus datos cuando quieras en ${baseUrl}/card/${customer.code}` }
       ]
     }
   };
@@ -160,14 +181,24 @@ function signManifest(manifestBuf) {
 }
 
 function buildPkpass(customer, state, baseUrl) {
+  // Card art is pre-rendered by scripts/build-card-art.js — one grid per visit
+  // count, shared with Google, so the server never renders images.
   const files = {
     'pass.json': Buffer.from(JSON.stringify(passJson(customer, state, baseUrl))),
-    'icon.png': image('icon.png', 29, 29),
-    'icon@2x.png': image('icon@2x.png', 58, 58),
-    'icon@3x.png': image('icon@3x.png', 87, 87),
-    'logo.png': image('logo.png', 160, 50),
-    'logo@2x.png': image('logo@2x.png', 320, 100)
+    'icon.png': cardArt('icon.png') || image('icon.png', 29, 29),
+    'icon@2x.png': cardArt('icon@2x.png') || image('icon@2x.png', 58, 58),
+    'icon@3x.png': cardArt('icon@3x.png') || image('icon@3x.png', 87, 87),
+    'logo.png': cardArt('logo.png') || image('logo.png', 160, 50),
+    'logo@2x.png': cardArt('logo@2x.png') || image('logo@2x.png', 320, 100)
   };
+  const logo3 = cardArt('logo@3x.png');
+  if (logo3) files['logo@3x.png'] = logo3;
+  for (const [name, f] of [['strip.png', gridFile(state, '')],
+                           ['strip@2x.png', gridFile(state, '@2x')],
+                           ['strip@3x.png', gridFile(state, '@3x')]]) {
+    const buf = cardArt(f);
+    if (buf) files[name] = buf;
+  }
   const manifest = {};
   for (const [name, buf] of Object.entries(files)) {
     manifest[name] = crypto.createHash('sha1').update(buf).digest('hex');

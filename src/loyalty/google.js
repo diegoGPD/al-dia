@@ -52,8 +52,19 @@ async function gapi(method, pathName, body, token) {
   return res;
 }
 
+const BASE = () => process.env.BASE_URL || 'https://al-dia-production.up.railway.app';
+
 function loyaltyObject(customer, state) {
-  const rewardReady = state.rewardsAvailable > 0;
+  const owed = (state.pending || []);
+  const hint = owed.length
+    ? `🎁 ya ganaste tu ${owed.map(p => p.name).join(' y ')}`
+    : state.nextReward
+      ? `faltan ${state.toNext} para tu ${state.nextReward.name}`
+      : 'tarjeta completa';
+  // Same pre-rendered grid Apple uses, at Google's 3:1 ratio. The ?v= is the
+  // stamp count: Google caches hero images hard, so a changing URL is the only
+  // reliable way to make the card actually redraw after a visit.
+  const hero = `${BASE()}/card/hero-${Math.max(0, Math.min(10, state.stamps || 0))}.png?v=${state.stamps}`;
   return {
     id: objectId(customer.code),
     classId: classId(),
@@ -61,14 +72,13 @@ function loyaltyObject(customer, state) {
     accountId: customer.code,
     accountName: state.name,
     barcode: { type: 'QR_CODE', value: customer.code, alternateText: customer.code },
-    loyaltyPoints: { label: 'Sellos', balance: { string: `${state.stamps}/${state.stampsNeeded}` } },
-    textModulesData: [{
-      id: 'status',
-      header: rewardReady ? 'Recompensa lista' : 'Próxima recompensa',
-      body: rewardReady
-        ? `🎁 ${state.rewardText} — ¡canjéala en tu próxima visita!`
-        : `${state.toNext} visita${state.toNext === 1 ? '' : 's'} para: ${state.rewardText}`
-    }]
+    loyaltyPoints: { label: 'visitas', balance: { string: String(state.stamps).padStart(2, '0') } },
+    heroImage: { sourceUri: { uri: hero } },
+    hexBackgroundColor: '#EC562B',
+    textModulesData: [
+      { id: 'status', header: 'un bugo?', body: hint },
+      { id: 'tagline', header: 'bugo bogo', body: 'mejor 2' }
+    ]
   };
 }
 
@@ -93,7 +103,7 @@ async function ensureClass(state) {
     programName: state.programName,
     programLogo: { sourceUri: { uri: LOGO_URL() } },
     reviewStatus: 'UNDER_REVIEW',
-    hexBackgroundColor: '#1a7f5a',
+    hexBackgroundColor: '#EC562B',
     countryCode: 'MX'
   };
   let created = await gapi('POST', '/loyaltyClass', body, token);

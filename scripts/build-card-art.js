@@ -89,8 +89,27 @@ function buildHero(visits) {
   return canvas;
 }
 
+// Pass icon (square) and logo, straight from the brand art. The logo is cream
+// on transparency, so it sits on the orange pass background as drawn.
+function buildChrome() {
+  const icon = art('stamp-empty');
+  for (const [name, px] of [['icon.png', 29], ['icon@2x.png', 58], ['icon@3x.png', 87]]) {
+    const r = resize(icon, px, px);
+    fs.writeFileSync(path.join(OUT, name), writePng(r.w, r.h, r.data));
+  }
+  // Apple caps the logo at 160×50 pt; fit the oval inside that, keeping ratio.
+  const logo = art('logo');
+  for (const [name, mult] of [['logo.png', 1], ['logo@2x.png', 2], ['logo@3x.png', 3]]) {
+    const boxW = 160 * mult, boxH = 50 * mult;
+    const scale = Math.min(boxW / logo.w, boxH / logo.h);
+    const r = resize(logo, Math.max(1, Math.round(logo.w * scale)), Math.max(1, Math.round(logo.h * scale)));
+    fs.writeFileSync(path.join(OUT, name), writePng(r.w, r.h, r.data));
+  }
+  return 6;
+}
+
 fs.mkdirSync(OUT, { recursive: true });
-let n = 0;
+let n = buildChrome();
 for (let v = 0; v <= 10; v++) {
   const master = buildGrid(v);
   for (const [suffix, div] of [['@3x', 1], ['@2x', 1.5], ['', 3]]) {
