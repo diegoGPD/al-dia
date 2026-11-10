@@ -166,6 +166,10 @@ echo "== period aggregation regression =="
 node scripts/period-tests.js >/tmp/period-out.txt 2>&1 || FAIL=1
 chk "period tests" "PASS" "$(grep -q 'ALL PERIOD TESTS PASSED' /tmp/period-out.txt && echo PASS || echo FAIL)"
 
+echo "== vista de gerente (tablet) =="
+node scripts/gerente-tests.js >/tmp/gerente-out.txt 2>&1 || FAIL=1
+chk "gerente tests" "PASS" "$(grep -q 'ALL GERENTE TESTS PASSED' /tmp/gerente-out.txt && echo PASS || echo FAIL)"
+
 echo "== order routing regression =="
 node scripts/routing-tests.js >/tmp/routing-out.txt 2>&1 || FAIL=1
 chk "routing tests" "PASS" "$(grep -q 'ALL ROUTING TESTS PASSED' /tmp/routing-out.txt && echo PASS || echo FAIL)"

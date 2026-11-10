@@ -171,6 +171,8 @@
   });
   registerRoute('dashboard_bind', (app) => {
     bindPeriodBar(app);
+    // Days with no apertura / cierre logged (defined in views/gerentes.js).
+    if (App.ui.checklistAlert) App.ui.checklistAlert(app);
     const card = app.querySelector('#moneyOutCard');
     const detail = app.querySelector('#moneyOutDetail');
     if (card && detail) card.onclick = () => {

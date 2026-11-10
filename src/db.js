@@ -717,4 +717,112 @@ function createLocation(name) {
   }
 })();
 
+// ---------------------------------------------------------------------------
+// Vista de Gerente (shared tablet). Everything here is additive: new tables
+// and nullable columns only — no table holding real data is rebuilt.
+// ---------------------------------------------------------------------------
+db.exec(`
+  -- People who run a shift. Not app users: no email, no password, just a PIN
+  -- they type on the shared tablet. Owners/managers in "users" are untouched.
+  CREATE TABLE IF NOT EXISTS gerentes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    pin_hash TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS gerente_locations (
+    gerente_id INTEGER NOT NULL REFERENCES gerentes(id) ON DELETE CASCADE,
+    location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+    PRIMARY KEY (gerente_id, location_id)
+  );
+
+  -- A registered tablet belongs to one location. Only the hash of its device
+  -- token is kept; the token itself lives in an httpOnly cookie on the tablet.
+  CREATE TABLE IF NOT EXISTS tablets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen_at TEXT
+  );
+
+  -- Checklist templates are data: one per location and type, editable.
+  CREATE TABLE IF NOT EXISTS checklist_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('apertura','cierre')),
+    header_note TEXT,
+    comments_placeholder TEXT,
+    footer_note TEXT,
+    UNIQUE (location_id, type)
+  );
+  CREATE TABLE IF NOT EXISTS checklist_sections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id INTEGER NOT NULL REFERENCES checklist_templates(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    warning_note TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1
+  );
+  CREATE TABLE IF NOT EXISTS checklist_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    section_id INTEGER NOT NULL REFERENCES checklist_sections(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    warning INTEGER NOT NULL DEFAULT 0,
+    position INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1
+  );
+
+  -- One apertura and one cierre per location per business day. The template
+  -- is copied into checklist_run_items when the run STARTS, so editing the
+  -- template later can never change a record, finished or half-done.
+  CREATE TABLE IF NOT EXISTS checklist_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('apertura','cierre')),
+    business_date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'in_progress' CHECK (status IN ('in_progress','completed')),
+    started_at TEXT NOT NULL,
+    started_by INTEGER REFERENCES gerentes(id),
+    finished_at TEXT,
+    finished_by INTEGER REFERENCES gerentes(id),
+    comments TEXT,
+    header_note TEXT,
+    comments_placeholder TEXT,
+    footer_note TEXT,
+    UNIQUE (location_id, type, business_date)
+  );
+  CREATE TABLE IF NOT EXISTS checklist_run_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES checklist_runs(id) ON DELETE CASCADE,
+    section_pos INTEGER NOT NULL,
+    section_title TEXT NOT NULL,
+    section_note TEXT,
+    position INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    warning INTEGER NOT NULL DEFAULT 0,
+    checked_at TEXT,
+    checked_by INTEGER REFERENCES gerentes(id),
+    op_at TEXT                      -- when the tablet recorded the last tap
+  );
+  CREATE INDEX IF NOT EXISTS idx_run_items_run ON checklist_run_items(run_id);
+  CREATE TABLE IF NOT EXISTS checklist_run_gerentes (
+    run_id INTEGER NOT NULL REFERENCES checklist_runs(id) ON DELETE CASCADE,
+    gerente_id INTEGER NOT NULL REFERENCES gerentes(id),
+    joined_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, gerente_id)
+  );
+`);
+// Who did it: nullable, so every existing row simply has no gerente.
+for (const table of ['oneoff_costs', 'loyalty_visits', 'loyalty_redemptions', 'loyalty_reward_grants']) {
+  if (!hasColumn(table, 'gerente_id')) db.exec(`ALTER TABLE ${table} ADD COLUMN gerente_id INTEGER`);
+}
+if (!hasColumn('loyalty_reward_grants', 'redeemed_gerente_id')) {
+  db.exec(`ALTER TABLE loyalty_reward_grants ADD COLUMN redeemed_gerente_id INTEGER`);
+}
+if (!hasColumn('oneoff_costs', 'tablet_id')) db.exec(`ALTER TABLE oneoff_costs ADD COLUMN tablet_id INTEGER`);
+
 module.exports = { db, DATA_DIR, createLocation };

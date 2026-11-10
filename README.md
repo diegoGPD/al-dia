@@ -87,6 +87,21 @@ Managers: the owner resets it from **Settings → People → ✎**. For the owne
 node scripts/reset-password.js you@email.com newpassword123
 ```
 
+## Vista de Gerente (tablet compartida)
+A touch-first screen at **`/gerente`** for the shared tablet in each sucursal. A gerente can do three things there and nothing else: scan a loyalty card, log an expense, and run the apertura / cierre checklist. It has no access to dashboards, settings or any financial data — the tablet talks only to `/api/g/*`.
+
+**Setup (once per tablet):** open `/gerente` on the tablet, sign in once as the owner, pick the sucursal. That plants a device cookie (only its hash is stored); the owner session is closed again immediately. Revoke a tablet from *Settings → Vista de Gerente → Tablets*.
+
+**People:** gerentes are a separate list (*Gerentes* tab), not app users — a name, a 4-digit PIN stored hashed, and their sucursales. PINs are unique within a sucursal because the PIN alone identifies the person. Five wrong PINs lock the tablet for a minute; the screen auto-locks after 5 idle minutes. Every visit, redemption, expense and checklist tick records the gerente.
+
+**Checklists:** templates are data, per sucursal and type, editable under the *Checklists* tab (add, edit, reorder, deactivate). A run copies the template when it **starts**, so editing a template never changes a record — finished or in progress. One apertura and one cierre per sucursal per business day; anything before 5:00 am counts as the previous day, so a cierre that ends after midnight belongs to the day it closes. A finished record is immutable.
+
+**Flaky wifi:** every tick is saved on the tablet first and sent in the background; a refresh or a dropped connection loses nothing, and timestamps are the moment of the tap, not of the sync. Starting a checklist, the PIN, expenses and finishing need a connection.
+
+**History:** owner sees everything with filters (*Historial* tab) plus a dashboard banner for days with no apertura/cierre (counted from the first one ever completed, skipping days marked closed). Gerentes see the last 7 days, read-only.
+
+Tests: `node scripts/gerente-tests.js`.
+
 ## Which location an order belongs to
 Every PideDirecto order is filed by the **restaurant ID inside the order itself**, matched against the location's Restaurant ID in *Settings → POS webhook → PideDirecto*. Nothing else is ever used — not the webhook URL, not the location you happen to be viewing, not the order's name. PideDirecto allows a single webhook URL for all restaurants, so the URL says nothing about who sent the order.
 

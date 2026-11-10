@@ -105,7 +105,14 @@ function buildChrome() {
     const r = resize(logo, Math.max(1, Math.round(logo.w * scale)), Math.max(1, Math.round(logo.h * scale)));
     fs.writeFileSync(path.join(OUT, name), writePng(r.w, r.h, r.data));
   }
-  return 6;
+  // Square business logo for the Google Pay & Wallet Console profile
+  // (640–1024 px). The wordmark is cream, so it needs the orange behind it.
+  const sq = solid(1024, 1024, ORANGE);
+  const lw = Math.round(1024 * 0.78);
+  const lh = Math.round(logo.h * lw / logo.w);
+  compose(sq, resize(logo, lw, lh), Math.round((1024 - lw) / 2), Math.round((1024 - lh) / 2));
+  fs.writeFileSync(path.join(OUT, 'business-logo-1024.png'), writePng(sq.w, sq.h, sq.data));
+  return 7;
 }
 
 fs.mkdirSync(OUT, { recursive: true });

@@ -70,7 +70,7 @@ function createCustomer({ name, phone, email }) {
 
 // One stamp per customer per calendar day (abuse guard). An owner can override
 // for a genuine second visit; the override is recorded as a normal visit.
-function addVisit(customer, locationId, { override = false } = {}) {
+function addVisit(customer, locationId, { override = false, gerenteId = null } = {}) {
   if (!override) {
     const already = db.prepare(
       `SELECT COUNT(*) c FROM loyalty_visits WHERE customer_id = ? AND date(visited_at) = date('now')`)
@@ -78,16 +78,16 @@ function addVisit(customer, locationId, { override = false } = {}) {
     if (already > 0) return { ok: false, reason: 'already_today', state: stateOf(customer) };
   }
   const before = stateOf(customer);
-  db.prepare('INSERT INTO loyalty_visits (customer_id, location_id) VALUES (?,?)')
-    .run(customer.id, locationId || null);
+  db.prepare('INSERT INTO loyalty_visits (customer_id, location_id, gerente_id) VALUES (?,?,?)')
+    .run(customer.id, locationId || null, gerenteId);
 
   // Crossing a milestone grants that reward, once per card.
   const after = visitsInCycle(customer);
   const justEarned = [];
   for (const r of rewards()) {
     if (after !== r.milestone) continue;      // exactly on the milestone visit
-    db.prepare('INSERT INTO loyalty_reward_grants (customer_id, reward_id) VALUES (?,?)')
-      .run(customer.id, r.id);
+    db.prepare('INSERT INTO loyalty_reward_grants (customer_id, reward_id, gerente_id) VALUES (?,?,?)')
+      .run(customer.id, r.id, gerenteId);
     justEarned.push(r);
   }
   touch(customer.id);
@@ -97,7 +97,7 @@ function addVisit(customer, locationId, { override = false } = {}) {
 // Staff hand over one specific reward. The card only empties once the final
 // reward is redeemed — and any reward still owed survives that reset, because
 // grants live in their own table.
-function redeem(customer, locationId, rewardId = null) {
+function redeem(customer, locationId, rewardId = null, gerenteId = null) {
   const state = stateOf(customer);
   const grant = rewardId
     ? state.pending.find(p => p.reward_id === Number(rewardId))
@@ -105,10 +105,10 @@ function redeem(customer, locationId, rewardId = null) {
   if (!grant) return { ok: false, reason: 'nothing_to_redeem', state };
 
   db.prepare(`UPDATE loyalty_reward_grants
-    SET redeemed_at = datetime('now'), redeemed_location_id = ? WHERE id = ?`)
-    .run(locationId || null, grant.id);
-  db.prepare('INSERT INTO loyalty_redemptions (customer_id, location_id, reward_id) VALUES (?,?,?)')
-    .run(customer.id, locationId || null, grant.reward_id);
+    SET redeemed_at = datetime('now'), redeemed_location_id = ?, redeemed_gerente_id = ? WHERE id = ?`)
+    .run(locationId || null, gerenteId, grant.id);
+  db.prepare('INSERT INTO loyalty_redemptions (customer_id, location_id, reward_id, gerente_id) VALUES (?,?,?,?)')
+    .run(customer.id, locationId || null, grant.reward_id, gerenteId);
 
   const last = rewards().slice(-1)[0];
   const cardFull = visitsInCycle(customer) >= cardSize();

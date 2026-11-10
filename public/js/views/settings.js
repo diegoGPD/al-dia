@@ -11,6 +11,11 @@
   registerRoute('settings', async () => {
     const parts = [`<h2 class="page-title">Settings</h2>`];
     if (isOwner()) {
+      parts.push(`<div class="card">
+        <div class="card-title">Vista de Gerente (tablet)</div>
+        <p class="hint">Gerentes y PINs, tablets registradas, checklists de apertura y cierre, e historial.</p>
+        <a class="btn primary" href="#/gerentes">Abrir administración de gerentes</a>
+      </div>`);
       const cats = await api(`/categories?${qLoc()}`);
       parts.push(categoriesSection(cats));
       parts.push(await loyaltySection());

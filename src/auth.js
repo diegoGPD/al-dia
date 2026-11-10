@@ -96,4 +96,21 @@ function checkLocation(req, res, next) {
   next();
 }
 
-module.exports = { setSession, clearSession, requireAuth, requireOwner, checkLocation };
+// Generic signed tokens for things that are not user sessions (the gerente's
+// PIN session on the shared tablet). Same HMAC, but no uid requirement.
+function signToken(payload) { return sign(payload); }
+function verifyToken(token) {
+  if (!token || typeof token !== 'string' || !token.includes('.')) return null;
+  const [body, mac] = token.split('.');
+  const expected = crypto.createHmac('sha256', SECRET).update(body).digest('base64url');
+  if (!mac || mac.length !== expected.length ||
+      !crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(expected))) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString());
+    if (!payload.exp || payload.exp < Date.now()) return null;
+    return payload;
+  } catch { return null; }
+}
+
+module.exports = { setSession, clearSession, requireAuth, requireOwner, checkLocation,
+  signToken, verifyToken, parseCookies };

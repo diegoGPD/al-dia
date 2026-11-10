@@ -118,24 +118,24 @@ function notifyCard(customer, state, message) {
   gwallet.pushUpdate(customer, state, message); // async, self-catching
 }
 
+// What the customer's lock screen says after a stamp. justEarned is a list of
+// rewards crossed on this visit — [] is truthy, so it is tested by length.
+function visitMessage(result) {
+  if (result.justEarned.length) return `🎁 ¡ganaste tu ${result.justEarned.map(r => r.name).join(' y ')}!`;
+  const s = result.state;
+  if (!s.nextReward) return 'sello agregado';
+  return s.toNext === 1
+    ? `sello agregado — te falta 1 para tu ${s.nextReward.name}`
+    : `sello agregado — faltan ${s.toNext} para tu ${s.nextReward.name}`;
+}
+
 function staffRoutes(r) {
   // Scan result → stamp a visit
   r.post('/loyalty/visit', checkLocation, (req, res) => {
     const customer = loyalty.customerByCode(req.body.code);
     if (!customer) return res.status(404).json({ error: 'Card not recognized' });
     const result = loyalty.addVisit(customer, req.locationId, { override: req.body.override === true });
-    if (result.ok) {
-      // justEarned is a list of rewards crossed on this visit — [] is truthy,
-      // so it must be tested by length or every visit claims a prize.
-      const won = result.justEarned.length
-        ? `🎁 ¡ganaste tu ${result.justEarned.map(r => r.name).join(' y ')}!`
-        : result.state.toNext === 1
-          ? `sello agregado — te falta 1 para tu ${result.state.nextReward.name}`
-          : result.state.nextReward
-            ? `sello agregado — faltan ${result.state.toNext} para tu ${result.state.nextReward.name}`
-            : 'sello agregado';
-      notifyCard(customer, result.state, won);
-    }
+    if (result.ok) notifyCard(customer, result.state, visitMessage(result));
     res.json(result);
   });
 
@@ -226,4 +226,4 @@ function staffRoutes(r) {
   });
 }
 
-module.exports = { publicRoutes, staffRoutes };
+module.exports = { publicRoutes, staffRoutes, notifyCard, visitMessage };
