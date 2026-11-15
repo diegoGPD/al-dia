@@ -172,7 +172,9 @@ function publicRoutes(r) {
        FROM oneoff_costs o
        LEFT JOIN variable_cost_categories c ON c.id = o.category_id
        LEFT JOIN accounts a ON a.id = o.account_id
-      WHERE o.location_id = ? AND o.gerente_id = ? AND o.date = ? ORDER BY o.id DESC`)
+      WHERE o.location_id = ? AND o.gerente_id = ? AND o.date = ?
+        AND NOT EXISTS (SELECT 1 FROM compra_lineas cl WHERE cl.oneoff_cost_id = o.id)   -- purchases are edited as purchases
+      ORDER BY o.id DESC`)
     .all(req.tablet.location_id, req.gerente.id, todayStr());
 
   r.get('/g/expenses', g, (req, res) => {
@@ -218,7 +220,8 @@ function publicRoutes(r) {
 
   r.put('/g/expenses/:id', g, (req, res) => {
     const own = db.prepare(
-      'SELECT id FROM oneoff_costs WHERE id = ? AND location_id = ? AND gerente_id = ? AND date = ?')
+      `SELECT id FROM oneoff_costs o WHERE id = ? AND location_id = ? AND gerente_id = ? AND date = ?
+         AND NOT EXISTS (SELECT 1 FROM compra_lineas cl WHERE cl.oneoff_cost_id = o.id)`)
       .get(Number(req.params.id), req.tablet.location_id, req.gerente.id, todayStr());
     if (!own) return res.status(403).json({ error: 'Solo puedes editar tus gastos de hoy.' });
     const f = expenseFields(req);
@@ -475,4 +478,4 @@ function staffRoutes(r) {
   });
 }
 
-module.exports = { publicRoutes, staffRoutes };
+module.exports = { publicRoutes, staffRoutes, tabletFrom };

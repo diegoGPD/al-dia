@@ -825,4 +825,112 @@ if (!hasColumn('loyalty_reward_grants', 'redeemed_gerente_id')) {
 }
 if (!hasColumn('oneoff_costs', 'tablet_id')) db.exec(`ALTER TABLE oneoff_costs ADD COLUMN tablet_id INTEGER`);
 
+// ---------------------------------------------------------------------------
+// Inventario: catálogo de insumos + compras. Additive only.
+//
+// The money of a purchase lives in oneoff_costs — the same rows the quick
+// register writes — one per purchase line, so purchases reach the profit
+// numbers through the existing path and there is no second cost ledger. These
+// tables add WHAT was bought (insumo, quantity, unit price) on top of it.
+// Recipes, yields, counts and stock are deliberately absent; cantidad_base is
+// stored so they can be built on this later.
+// ---------------------------------------------------------------------------
+db.exec(`
+  CREATE TABLE IF NOT EXISTS proveedores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL,
+    nombre_normalizado TEXT NOT NULL,
+    notas TEXT,
+    activo INTEGER NOT NULL DEFAULT 1,
+    creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- One catalog for every sucursal, so prices are comparable between them.
+  CREATE TABLE IF NOT EXISTS insumos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL,
+    nombre_normalizado TEXT NOT NULL,
+    categoria TEXT NOT NULL CHECK (categoria IN ('Proteína','Abarrotes','Lácteos','Desechables','Bebidas','Otros')),
+    unidad_base TEXT NOT NULL CHECK (unidad_base IN ('kg','litro','pieza')),
+    activo INTEGER NOT NULL DEFAULT 1,
+    revisado INTEGER NOT NULL DEFAULT 0,
+    merged_into INTEGER REFERENCES insumos(id),   -- a merged insumo is kept, never deleted
+    creado_por_gerente INTEGER REFERENCES gerentes(id),
+    creado_por_usuario INTEGER REFERENCES users(id),
+    creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_insumos_norm ON insumos(nombre_normalizado);
+
+  CREATE TABLE IF NOT EXISTS insumo_presentaciones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    insumo_id INTEGER NOT NULL REFERENCES insumos(id),
+    nombre TEXT NOT NULL,
+    nombre_normalizado TEXT NOT NULL,
+    factor REAL NOT NULL CHECK (factor > 0),      -- 1 presentación = factor unidades base
+    creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_present_insumo ON insumo_presentaciones(insumo_id);
+
+  CREATE TABLE IF NOT EXISTS compras (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_uid TEXT UNIQUE,                       -- made on the phone: a retried upload never duplicates
+    location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+    fecha TEXT NOT NULL,
+    proveedor_id INTEGER REFERENCES proveedores(id),
+    account_id INTEGER REFERENCES accounts(id),
+    gerente_id INTEGER REFERENCES gerentes(id),
+    usuario_id INTEGER REFERENCES users(id),
+    foto TEXT,
+    notas TEXT,
+    creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_compras_loc_fecha ON compras(location_id, fecha);
+
+  -- factor_snapshot, cantidad_base, costo_unitario_base and the unit are frozen
+  -- here at purchase time. History is never recomputed from the catalog.
+  CREATE TABLE IF NOT EXISTS compra_lineas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    compra_id INTEGER NOT NULL REFERENCES compras(id) ON DELETE CASCADE,
+    insumo_id INTEGER NOT NULL REFERENCES insumos(id),
+    presentacion_id INTEGER REFERENCES insumo_presentaciones(id),
+    presentacion_nombre TEXT,
+    cantidad REAL NOT NULL,
+    factor_snapshot REAL NOT NULL,
+    cantidad_base REAL NOT NULL,
+    unidad_base_snapshot TEXT NOT NULL,
+    total_linea REAL NOT NULL,
+    costo_unitario_base REAL NOT NULL,
+    oneoff_cost_id INTEGER NOT NULL UNIQUE REFERENCES oneoff_costs(id)   -- where the money is
+  );
+  CREATE INDEX IF NOT EXISTS idx_lineas_insumo ON compra_lineas(insumo_id);
+  CREATE INDEX IF NOT EXISTS idx_lineas_compra ON compra_lineas(compra_id);
+
+  -- Which existing cost category each insumo categoría posts into, per sucursal.
+  -- NULL = uncategorised (lands with the unusual one-offs).
+  CREATE TABLE IF NOT EXISTS insumo_categoria_map (
+    location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+    categoria TEXT NOT NULL,
+    cost_category_id INTEGER REFERENCES variable_cost_categories(id),
+    PRIMARY KEY (location_id, categoria)
+  );
+
+  CREATE TABLE IF NOT EXISTS inventario_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    alerta_pct REAL NOT NULL DEFAULT 12,
+    alerta_n INTEGER NOT NULL DEFAULT 5
+  );
+  INSERT OR IGNORE INTO inventario_config (id) VALUES (1);
+
+  -- A gerente's own phone: a personal, revocable link (only its hash is kept),
+  -- then their PIN every session.
+  CREATE TABLE IF NOT EXISTS gerente_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gerente_id INTEGER NOT NULL REFERENCES gerentes(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen_at TEXT
+  );
+`);
+
 module.exports = { db, DATA_DIR, createLocation };

@@ -93,6 +93,8 @@
 
   registerRoute('breakdown_bind', (app) => {
     bindPeriodBar(app);
+    // Cost composition charts + link to Inventario (defined in views/inventario.js).
+    if (App.ui.costCharts) App.ui.costCharts(app);
     loadChannels(app);
     if (isOwner()) loadReconcile(app);
     else { const b = app.querySelector('#reconCard'); if (b) b.remove(); }

@@ -224,11 +224,17 @@ module.exports = (r) => {
   });
 
   // ---- one-off costs ----
+  // A cost row that belongs to a purchase line is changed through the purchase,
+  // so the line (quantity, unit price) and the money can never disagree.
+  const { isCompraCost } = require('../inventario/core');
+  const COMPRA_LOCK = 'Este gasto es una línea de una compra de inventario. Se corrige o se borra desde Inventario → Compras.';
+
   r.get('/oneoff', checkLocation, (req, res) => {
     const { start, end } = req.query;
     if (badDate(start) || badDate(end)) return res.status(400).json({ error: 'Invalid range' });
     res.json(db.prepare(
-      `SELECT o.*, c.name category_name FROM oneoff_costs o
+      `SELECT o.*, c.name category_name,
+              EXISTS (SELECT 1 FROM compra_lineas cl WHERE cl.oneoff_cost_id = o.id) es_compra FROM oneoff_costs o
        LEFT JOIN variable_cost_categories c ON c.id = o.category_id
        WHERE o.location_id = ? AND o.date BETWEEN ? AND ? ORDER BY o.date DESC, o.id DESC`)
       .all(req.locationId, start, end));
@@ -250,6 +256,7 @@ module.exports = (r) => {
     const it = db.prepare('SELECT * FROM oneoff_costs WHERE id = ? AND location_id = ?')
       .get(Number(req.params.id), req.locationId);
     if (!it) return res.status(404).json({ error: 'Not found' });
+    if (isCompraCost(it.id)) return res.status(409).json({ error: COMPRA_LOCK });
     const b = req.body;
     db.prepare(`UPDATE oneoff_costs SET date=?, description=?, amount=?, invoiced=?, account_id=?, category_id=?
       WHERE id=?`)
@@ -264,6 +271,7 @@ module.exports = (r) => {
   });
 
   r.delete('/oneoff/:id', checkLocation, (req, res) => {
+    if (isCompraCost(req.params.id)) return res.status(409).json({ error: COMPRA_LOCK });
     db.prepare('DELETE FROM oneoff_costs WHERE id = ? AND location_id = ?')
       .run(Number(req.params.id), req.locationId);
     res.json({ ok: true });

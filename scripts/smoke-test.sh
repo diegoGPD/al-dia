@@ -170,6 +170,10 @@ echo "== vista de gerente (tablet) =="
 node scripts/gerente-tests.js >/tmp/gerente-out.txt 2>&1 || FAIL=1
 chk "gerente tests" "PASS" "$(grep -q 'ALL GERENTE TESTS PASSED' /tmp/gerente-out.txt && echo PASS || echo FAIL)"
 
+echo "== inventario (insumos + compras + gráficas) =="
+node scripts/inventario-tests.js >/tmp/inventario-out.txt 2>&1 || FAIL=1
+chk "inventario tests" "PASS" "$(grep -q 'ALL INVENTARIO TESTS PASSED' /tmp/inventario-out.txt && echo PASS || echo FAIL)"
+
 echo "== order routing regression =="
 node scripts/routing-tests.js >/tmp/routing-out.txt 2>&1 || FAIL=1
 chk "routing tests" "PASS" "$(grep -q 'ALL ROUTING TESTS PASSED' /tmp/routing-out.txt && echo PASS || echo FAIL)"

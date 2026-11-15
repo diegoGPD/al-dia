@@ -257,8 +257,9 @@
             <div><strong>${esc(o.description)}</strong>${o.category_name ? ` <span class="pill good">${esc(o.category_name)}</span>` : ''}
               <div class="hint">${fmtDate(o.date)} · ${o.invoiced ? 'Invoiced' : 'Not invoiced'}${o.logged_by ? ' · by ' + esc(o.logged_by) : ''}${o.receipt ? ` · <a href="/api/oneoff/${o.id}/receipt" target="_blank">📎 receipt</a>` : ''}</div></div>
             <div class="list-right">${money(o.amount)}
+              ${o.es_compra ? '<span class="pill" title="Línea de una compra de inventario">🧾 compra</span>' : `
               <button class="icon-btn edit-oneoff" aria-label="Edit">✎</button>
-              <button class="icon-btn danger del-oneoff" data-id="${o.id}" aria-label="Delete">✕</button></div>
+              <button class="icon-btn danger del-oneoff" data-id="${o.id}" aria-label="Delete">✕</button>`}</div>
           </div>`).join('')}
       </div>` : ''}`;
   });

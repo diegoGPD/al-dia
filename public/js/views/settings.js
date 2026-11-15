@@ -16,6 +16,11 @@
         <p class="hint">Gerentes y PINs, tablets registradas, checklists de apertura y cierre, e historial.</p>
         <a class="btn primary" href="#/gerentes">Abrir administración de gerentes</a>
       </div>`);
+      parts.push(`<div class="card">
+        <div class="card-title">Inventario</div>
+        <p class="hint">Catálogo de insumos, compras, precios por kg/litro/pieza, alertas y accesos de gerentes desde su teléfono.</p>
+        <a class="btn primary" href="#/inventario">Abrir Inventario</a>
+      </div>`);
       const cats = await api(`/categories?${qLoc()}`);
       parts.push(categoriesSection(cats));
       parts.push(await loyaltySection());

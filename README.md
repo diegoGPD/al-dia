@@ -102,6 +102,23 @@ A touch-first screen at **`/gerente`** for the shared tablet in each sucursal. A
 
 Tests: `node scripts/gerente-tests.js`.
 
+## Inventario (insumos + compras)
+Purchase-side cost tracking: what was bought, how much, at what price per kg / litro / pieza. No recipes, yields, counts or stock — `cantidad_base` is stored on every line so those can be built on top later.
+
+**One ledger.** A purchase line owns exactly one row in `oneoff_costs`, the same table the quick register writes, created in the same transaction. Profit, benchmarks and accounts read that table as before; the inventario tables only add *what* the money bought. A cost row that belongs to a purchase can't be edited from the one-off screen — it is corrected or voided as a purchase (*Inventario → Compras*). `inventario.ledgerDrift()` lists any line that disagrees with its cost row and must always be empty (tested).
+
+**History is frozen.** Each line stores `factor_snapshot`, `cantidad_base`, `costo_unitario_base` and the unit at purchase time. Editing a presentación, changing an insumo's unit (which asks for confirmation) or merging insumos never recomputes them.
+
+**Capture (gerente, phone):** `/compra`. The owner generates a personal link per gerente (*Inventario → Accesos*, shown once, revocable); the gerente opens it once on their phone and from then on enters with their PIN. Search and create are one field; matching ignores case, accents, plurals, word order and spelling-by-ear (`public/compra/normalize.js`, shared by phone and server). Drafts and saved purchases are kept on the phone and sent in the background; each purchase carries a client-made id, so a retry never duplicates. Gerentes see only their own captures of today and no prices beyond what they type.
+
+**Catalog (owner):** one catalog for all sucursales. Insumos created by gerentes land in *Pendientes de revisar*. **Merge** re-points every purchase line to the surviving insumo and folds presentaciones; the merged insumo is kept (inactive, `merged_into`), nothing is deleted. Each insumo categoría posts into an existing cost category per sucursal (*Inventario → Ajustes*).
+
+**Analytics (owner only):** spend per insumo vs the previous period, top insumos, unit price over time, supplier comparison, and price alerts (default: more than 12% above the average of the last 5 purchases of that insumo at the same sucursal; configurable).
+
+**Cost charts (Costs page):** daily composition, revenue line and cost-as-%-of-sales. Every day's figures come from `calc.summary(location, day, day)` — there is no second aggregation path — and the card states whether the bars add up to the period total.
+
+Tests: `node scripts/inventario-tests.js`.
+
 ## Which location an order belongs to
 Every PideDirecto order is filed by the **restaurant ID inside the order itself**, matched against the location's Restaurant ID in *Settings → POS webhook → PideDirecto*. Nothing else is ever used — not the webhook URL, not the location you happen to be viewing, not the order's name. PideDirecto allows a single webhook URL for all restaurants, so the URL says nothing about who sent the order.
 

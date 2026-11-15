@@ -10,6 +10,7 @@ require('./routes/loyalty').publicRoutes(r); // customer signup/card/pass + Pass
 require('./routes/webhooks').publicRoutes(r); // tokened POS inbound webhook
 require('./routes/external').publicRoutes(r); // kitchen feed (own read-only token)
 require('./routes/gerente').publicRoutes(r);  // shared tablet: device cookie + gerente PIN
+require('./routes/inventario').publicRoutes(r); // gerente purchase capture: personal phone link + PIN
 
 r.use(requireAuth);               // everything below needs a session
 
@@ -19,6 +20,7 @@ require('./routes/quick').staffRoutes(r);    // quick-link management + receipts
 require('./routes/external').staffRoutes(r); // kitchen feed token management (owner)
 require('./routes/reconcile')(r);            // PIN-gated payout reconciliation
 require('./routes/gerente').staffRoutes(r);   // owner: gerentes, tablets, checklist templates + history
+require('./routes/inventario').staffRoutes(r); // owner: insumo catalog, purchase analytics, cost charts
 require('./routes/demo')(r);                 // demo-only: reset + order simulator (inert unless DEMO_MODE=1)
 
 require('./routes/admin')(r);     // me, locations, users, maintenance
