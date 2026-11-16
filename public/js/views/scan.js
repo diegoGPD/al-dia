@@ -52,7 +52,12 @@
     window.addEventListener('hashchange', stop, { once: true });
 
     // ---- decoder: native first, jsQR as fallback -------------------------
-    let detector = null;
+    let detector = null, decoderKind = '';
+    const plainDecode = async (video, decode) => {
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      canvas.getContext('2d', { willReadFrequently: true }).drawImage(video, 0, 0);
+      return decode(canvas, {});
+    };
     async function getDecoder() {
       if (detector) return detector;
       if ('BarcodeDetector' in window) {
@@ -60,6 +65,7 @@
           const formats = await window.BarcodeDetector.getSupportedFormats();
           if (formats.includes('qr_code')) {
             const d = new window.BarcodeDetector({ formats: ['qr_code'] });
+            decoderKind = 'native';
             detector = async cv => {
               const found = await d.detect(cv);
               return found.length ? found[0].rawValue : null;
@@ -77,6 +83,7 @@
           document.head.appendChild(s);
         });
       }
+      decoderKind = 'jsqr';
       detector = async (cv, opts) => {
         const img = cv.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, cv.width, cv.height);
         const hit = window.jsQR(img.data, img.width, img.height, { inversionAttempts: opts && opts.invert ? 'attemptBoth' : 'dontInvert' });
@@ -187,14 +194,18 @@
         // Permission first with a loose constraint. Asking for the rear camera
         // as a hard requirement is what breaks laptops and desktops; it is only
         // ever a preference.
-        stream = await navigator.mediaDevices.getUserMedia(window.QREnhance.constraints(deviceId));
+        const QE = window.QREnhance || null;      // missing only if an old index.html is cached
+        stream = await navigator.mediaDevices.getUserMedia(QE ? QE.constraints(deviceId)
+          : { video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } } });
         video.srcObject = stream;
         await video.play();
 
         const track = stream.getVideoTracks()[0];
-        await window.QREnhance.tune(track);        // continuous focus / slight zoom where the camera allows
-        const flipExposure = window.QREnhance.alternate(track);   // auto ↔ darker, until something reads
-        window.QREnhance.overlay(video.parentElement);
+        if (QE) {
+          await QE.tune(track);                    // continuous focus / slight zoom where the camera allows
+          QE.overlay(video.parentElement);
+        }
+        const flipExposure = QE ? QE.alternate(track) : () => {};   // auto ↔ darker, until something reads
         const settings = track.getSettings ? track.getSettings() : {};
         if (settings.deviceId) remember(settings.deviceId);
         // Mirror a front-facing webcam so staff can aim it; the canvas copies
@@ -205,17 +216,21 @@
         if (camPick.options.length && settings.deviceId) camPick.value = settings.deviceId;
 
         const decode = await getDecoder();
-        status.textContent = cams.length > 1
-          ? 'apunta al código QR del cliente'
-          : 'apunta al código QR del cliente';
         scanning = true;
+        // Diagnostics line: what the camera actually gave us and which decoder runs.
+        const diag = () => `${video.videoWidth}×${video.videoHeight} · ${('BarcodeDetector' in window) && decoderKind === 'native' ? 'nativo' : 'jsQR'}${QE ? '' : ' · sin mejoras (recarga con Ctrl+Shift+R)'}${lastErr ? ' · error: ' + lastErr : ''}`;
+        let frames = 0, lastErr = '';
+        status.innerHTML = `apunta al código QR del cliente<br><small class="hint" id="scanDiag"></small>`;
+        const diagEl = status.querySelector('#scanDiag');
 
         const tick = async () => {
           if (!scanning) return;
           if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth) {
             let found = null;
-            try { found = await window.QREnhance.decodeFrame(video, decode); } catch { /* keep scanning */ }
+            try { found = QE ? await QE.decodeFrame(video, decode) : await plainDecode(video, decode); }
+            catch (e) { lastErr = (e && e.message) || String(e); }
             if (!found) flipExposure();
+            if (++frames % 10 === 0 && diagEl) diagEl.textContent = diag();
             if (found) {
               const code = String(found).trim();
               const now = Date.now();

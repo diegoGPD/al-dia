@@ -19,7 +19,10 @@ app.use(require('./src/loyalty/pages')); // public: /loyalty/join, /card/:code, 
 app.use(require('./src/routes/quick').pagesRouter()); // public: /go/:token quick cost entry
 
 // Static frontend
-app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));
+// Always revalidate pages and scripts (ETag keeps it cheap): a stale index.html
+// paired with a fresh script is how a deploy silently breaks one browser.
+app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html',
+  setHeaders: (res, file) => { if (/\.(html|js|css)$/.test(file)) res.setHeader('Cache-Control', 'no-cache'); } }));
 app.get(/^\/(?!api).*/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 // JSON errors, no stack traces to clients
