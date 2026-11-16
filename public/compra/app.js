@@ -295,7 +295,9 @@
     if (sh.step === 'search') return `<div class="sheet"><div class="inner">
         <input class="in" id="sQ" placeholder="Buscar o crear producto…" value="${esc(sh.q)}" autocomplete="off" autocapitalize="sentences" enterkeyhint="search">
         <div id="sRes">${resultsHtml(sh.q)}</div>
-      </div><div class="bottom"><div class="inner"><button class="btn full" data-act="closeSheet">Cancelar</button></div></div></div>`;
+      </div><div class="bottom"><div class="inner">${S.draft.lineas.length
+        ? `<button class="btn full primary" data-act="closeSheet">✓ Listo · ${S.draft.lineas.length} producto${S.draft.lineas.length === 1 ? '' : 's'} (${money(draftTotal())})</button>`
+        : '<button class="btn full" data-act="closeSheet">Cancelar</button>'}</div></div></div>`;
 
     if (sh.step === 'create') return `<div class="sheet"><div class="inner">
         <div class="title">Nuevo producto</div>
