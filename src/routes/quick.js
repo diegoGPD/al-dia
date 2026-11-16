@@ -15,6 +15,10 @@ const RECEIPT_DIR = path.join(DATA_DIR, 'receipts');
 const TZ_OFFSET_H = Number(process.env.TZ_OFFSET_HOURS ?? -6);
 const todayLocal = () => new Date(Date.now() + TZ_OFFSET_H * 3600e3).toISOString().slice(0, 10);
 
+// Opening /go/<token> also plants this cookie, so /compra (per-product capture)
+// recognises the same person without a PIN. inventario.js reads it.
+const QUICK_COOKIE = 'aldia_qlink';
+
 // ---- link resolution ----
 function linkByToken(token) {
   const link = db.prepare(
@@ -87,8 +91,12 @@ function quickPage(link) {
     flex-direction:column;font-size:34px;font-weight:800;z-index:9}
   .hint{color:var(--muted);font-size:12px;text-align:center;margin-top:10px}
   .err{color:#c0392b;font-size:14px;text-align:center;min-height:1.2em;margin-top:8px}
+  .alt{display:block;text-align:center;text-decoration:none;color:var(--g);background:#fff;border:1.5px solid var(--g);
+    border-radius:14px;padding:14px;font-size:16px;font-weight:800;margin-bottom:14px}
+  .alt small{display:block;color:var(--muted);font-weight:600;font-size:12px;margin-top:2px}
 </style></head><body>
 <div class="w">
+  <a class="alt" href="/compra/">📦 Compra por producto<small>Comida y empaques: producto, cantidad y costo</small></a>
   <form id="f">
     <input class="amt" id="amount" type="number" inputmode="decimal" step="any" min="0.01" placeholder="$0" autofocus required>
     <div class="chips" id="chips"></div>
@@ -101,7 +109,7 @@ function quickPage(link) {
       <input type="file" id="photo" accept="image/*" capture="environment" hidden></label>
     <button class="btn" type="submit">Guardar</button>
     <p class="err" id="err"></p>
-    <p class="hint">Solo registra gastos. Nada más.</p>
+    <p class="hint">Gasto rápido sin desglose. Para comida y empaques usa "Compra por producto".</p>
   </form>
 </div>
 <div id="ok">✅<div style="font-size:22px;margin-top:8px">Guardado</div></div>
@@ -188,6 +196,8 @@ function pagesRouter() {
   router.get('/go/:token', (req, res) => {
     const link = linkByToken(req.params.token);
     if (!link) return res.status(404).send('<!DOCTYPE html><meta charset="utf8"><title>404</title><p style="font-family:sans-serif;text-align:center;margin-top:30vh">Enlace no válido.</p>');
+    const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+    res.append('Set-Cookie', `${QUICK_COOKIE}=${link.token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${2 * 365 * 86400}${secure}`);
     res.send(quickPage(link));
   });
 
@@ -271,4 +281,4 @@ function staffRoutes(r) {
   });
 }
 
-module.exports = { pagesRouter, staffRoutes, publicRoutes };
+module.exports = { linkByToken, QUICK_COOKIE, pagesRouter, staffRoutes, publicRoutes };

@@ -60,7 +60,8 @@
   window.addEventListener('offline', () => setOnline(false));
 
   // ------------------------------------------------------------ session ----
-  function lock() { S.session = null; LS.del('c.session'); S.sheet = null; go('pin'); }
+  // Quick-link users have no PIN: a lock just re-boots (the server hands a fresh token).
+  function lock() { S.session = null; LS.del('c.session'); S.sheet = null; if (S.boot && S.boot.mode === 'quick') start(); else go('pin'); }
   let lastSaved = 0;
   function active() {
     S.lastActive = Date.now();
@@ -120,7 +121,7 @@
     return `<div class="top"><span class="dot${S.online ? '' : ' off'}"></span>
       <div class="who"><b>${esc(S.session.name)}</b><span>${esc(locName)}</span></div>
       ${S.boot.locations.length > 1 ? '<button data-act="pickLoc">Sucursal</button>' : ''}
-      <button data-act="lock">Salir</button></div>`;
+      ${S.boot.mode === 'quick' ? '' : '<button data-act="lock">Salir</button>'}</div>`;
   }
   function render() {
     const bare = ['pin', 'noaccess', 'dead', 'pickloc'].includes(S.view);
@@ -526,6 +527,12 @@
     catch { S.boot = LS.get('c.boot'); }
     if (!S.boot) return go('dead');
     if (!S.boot.mode) return go('noaccess');
+    if (S.boot.mode === 'quick') {
+      if (!S.boot.token) return go('dead');   // offline with a stale boot: nothing to sign with
+      S.session = { id: null, name: S.boot.gerente.name, token: S.boot.token };
+      S.lastActive = Date.now(); LS.set('c.session', { ...S.session, last: S.lastActive });
+      return enter();
+    }
     const saved = LS.get('c.session');
     if (saved && saved.token && Date.now() - (saved.last || 0) < IDLE_MS) {
       S.session = { id: saved.id, name: saved.name, token: saved.token }; S.lastActive = Date.now();

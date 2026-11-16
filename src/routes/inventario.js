@@ -33,6 +33,15 @@ function linkFrom(req) {
     `SELECT k.id, k.gerente_id, g.name, g.pin_hash FROM gerente_links k JOIN gerentes g ON g.id = k.gerente_id
       WHERE k.token_hash = ? AND k.active = 1 AND g.active = 1`).get(sha(token)) || null;
 }
+// The quick-expense link (/go/<token>) planted a cookie: that person, no PIN.
+function quickFrom(req) {
+  const token = parseCookies(req)[require('./quick').QUICK_COOKIE];
+  if (!token) return null;
+  const link = require('./quick').linkByToken(token);
+  return link ? { id: link.token, user_id: link.user_id, name: link.name, role: link.role, locations: link.locations } : null;
+}
+const quickToken = q => signToken({ uid: q.user_id, qid: q.id, exp: Date.now() + SESSION_HOURS * 3600e3 });
+
 const locationsOf = gerenteId => db.prepare(
   `SELECT l.id, l.name FROM locations l JOIN gerente_locations gl ON gl.location_id = l.id
     WHERE gl.gerente_id = ? AND l.active = 1 ORDER BY l.name`).all(gerenteId);
@@ -41,7 +50,15 @@ const locationsOf = gerenteId => db.prepare(
 function requireCapturer(req, res, next) {
   const payload = verifyToken(req.get('X-Gerente'));
   const link = linkFrom(req);
-  if (link) {
+  const quick = link ? null : quickFrom(req);
+  if (quick) {
+    if (!payload || payload.qid !== quick.id || payload.uid !== quick.user_id)
+      return res.status(401).json({ error: 'Vuelve a abrir tu enlace.', code: 'pin' });
+    req.gerente = { id: null, name: quick.name };
+    req.userId = quick.user_id;
+    req.reviewed = quick.role === 'owner';
+    req.gLocations = quick.locations;
+  } else if (link) {
     if (!payload || payload.lid !== link.id || payload.gid !== link.gerente_id)
       return res.status(401).json({ error: 'Ingresa tu PIN.', code: 'pin' });
     req.gerente = { id: link.gerente_id, name: link.name };
@@ -71,9 +88,14 @@ function pinLocked(key) {
 }
 
 // A gerente's own purchases of today at a sucursal — the only ones they can see or edit.
-const ownToday = (gerenteId, locationId) => db.prepare(
-  'SELECT id FROM compras WHERE gerente_id = ? AND location_id = ? AND fecha = ? ORDER BY id DESC')
-  .all(gerenteId, locationId, todayStr()).map(r => stripPrices(inv.compraFull(r.id)));
+// `who` is req: a gerente (gerente_id) or a quick-link user (usuario_id).
+const ownWhere = req => req.gerente.id ? ['gerente_id', req.gerente.id] : ['usuario_id', req.userId];
+const ownToday = (req, locationId) => {
+  const [col, id] = ownWhere(req);
+  return db.prepare(`SELECT id FROM compras WHERE ${col} = ? AND location_id = ? AND fecha = ? ORDER BY id DESC`)
+    .all(id, locationId, todayStr()).map(r => stripPrices(inv.compraFull(r.id)));
+};
+const ctxOf = req => ({ locationId: req.locationId, gerenteId: req.gerente.id, userId: req.userId || null, name: req.gerente.name, reviewed: req.reviewed });
 // They entered these totals themselves; nothing beyond that is sent back.
 function stripPrices(c) {
   return { id: c.id, fecha: c.fecha, proveedor_id: c.proveedor_id, proveedor: c.proveedor, account_id: c.account_id,
@@ -102,6 +124,8 @@ function publicRoutes(r) {
       db.prepare(`UPDATE gerente_links SET last_seen_at = datetime('now') WHERE id = ?`).run(link.id);
       return res.json({ mode: 'link', gerente: { id: link.gerente_id, name: link.name }, locations: locationsOf(link.gerente_id), today: todayStr() });
     }
+    const quick = quickFrom(req);
+    if (quick) return res.json({ mode: 'quick', gerente: { id: null, name: quick.name }, locations: quick.locations, today: todayStr(), token: quickToken(quick) });
     const { tabletFrom } = require('./gerente');
     const tablet = tabletFrom(req);
     if (tablet) return res.json({ mode: 'tablet', locations: [{ id: tablet.location_id, name: tablet.location_name }], today: todayStr() });
@@ -134,22 +158,23 @@ function publicRoutes(r) {
       insumos: inv.catalog(req.locationId),
       proveedores: db.prepare('SELECT id, nombre FROM proveedores WHERE activo = 1 ORDER BY nombre').all(),
       cuentas: db.prepare('SELECT id, name nombre FROM accounts WHERE location_id = ? AND active = 1 ORDER BY position').all(req.locationId),
-      mias: ownToday(req.gerente.id, req.locationId)
+      mias: ownToday(req, req.locationId)
     });
   });
 
   r.post('/p/compras', g, h((req, res) => {
-    const out = inv.saveCompra({ locationId: req.locationId, gerenteId: req.gerente.id, name: req.gerente.name }, req.body);
-    res.json({ ok: true, duplicate: out.duplicate, compra: stripPrices(out.compra), mias: ownToday(req.gerente.id, req.locationId) });
+    const out = inv.saveCompra(ctxOf(req), req.body);
+    res.json({ ok: true, duplicate: out.duplicate, compra: stripPrices(out.compra), mias: ownToday(req, req.locationId) });
   }));
 
   r.put('/p/compras/:id', g, h((req, res) => {
-    const own = db.prepare('SELECT id FROM compras WHERE id = ? AND gerente_id = ? AND location_id = ? AND fecha = ?')
-      .get(Number(req.params.id), req.gerente.id, req.locationId, todayStr());
+    const [col, who] = ownWhere(req);
+    const own = db.prepare(`SELECT id FROM compras WHERE id = ? AND ${col} = ? AND location_id = ? AND fecha = ?`)
+      .get(Number(req.params.id), who, req.locationId, todayStr());
     if (!own) return res.status(403).json({ error: 'Solo puedes editar tus compras de hoy.' });
     // Their own capture of today stays "of today": the date isn't theirs to move.
-    inv.updateCompra(own.id, { gerenteId: req.gerente.id, name: req.gerente.name }, { ...req.body, fecha: todayStr() });
-    res.json({ ok: true, mias: ownToday(req.gerente.id, req.locationId) });
+    inv.updateCompra(own.id, ctxOf(req), { ...req.body, fecha: todayStr() });
+    res.json({ ok: true, mias: ownToday(req, req.locationId) });
   }));
 }
 

@@ -269,6 +269,43 @@ const q1 = (sql, ...a) => db.prepare(sql).get(...a);
   chk('day total dropped by exactly that purchase', true, near(costBefore - 290, calc.summary(MTY, today, today).costs.total));
   chk('ledger agrees at the end', [], inv.ledgerDrift());
 
+  console.log('== quick-expense link (/go) also captures by product, without a PIN ==');
+  const mgr = (await owner('POST', '/users', { email: 'm@t.mx', name: 'Mario', password: 'password123', locationIds: [TRC] })).json.id;
+  const goUrl = (await owner('POST', `/quick-links/${mgr}`)).json.url;
+  const goPhone = client();
+  chk('no cookie yet: no access', null, (await goPhone('GET', '/p/boot')).json.mode);
+  const page = await fetch(goUrl, { redirect: 'manual' });
+  const qCookie = (page.headers.getSetCookie().find(c => c.startsWith('aldia_qlink=')) || '').split(';')[0];
+  chk('/go plants the cookie', true, qCookie.length > 'aldia_qlink='.length);
+  chk('/go page links to /compra', true, (await page.text()).includes('href="/compra/"'));
+  const Q = { Cookie: qCookie };
+  let qb = (await goPhone('GET', '/p/boot', null, Q)).json;
+  chk('boot: quick mode, Mario, only TRC, token handed over', ['quick', 'Mario', [TRC], true], [qb.mode, qb.gerente.name, qb.locations.map(l => l.id), !!qb.token]);
+  const QA = { Cookie: qCookie, 'X-Gerente': qb.token };
+  chk('no token: refused', 401, (await goPhone('GET', `/p/catalogo?location=${TRC}`, null, Q)).status);
+  chk("Ana's gerente token does not open Mario's link", 401, (await goPhone('GET', `/p/catalogo?location=${TRC}`, null, { Cookie: qCookie, ...A })).status);
+  chk('MTY not allowed for Mario', 403, (await goPhone('GET', `/p/catalogo?location=${MTY}`, null, QA)).status);
+  chk('catalog opens', 200, (await goPhone('GET', `/p/catalogo?location=${TRC}`, null, QA)).status);
+  const trcBefore = calc.summary(TRC, today, today).costs.total;
+  r = await goPhone('POST', '/p/compras', { client_uid: 'uid-q1', location_id: TRC, lineas: [
+    { nuevo_insumo: { nombre: 'Tortilla harina', categoria: 'Abarrotes', unidad_base: 'kg' }, cantidad: 5, total: 300 },
+    { insumo_id: l1.insumo_id, cantidad: 1, total: 150 } ] }, QA);
+  chk('saved by the quick-link user', 200, r.status);
+  const qc = q1('SELECT gerente_id g, usuario_id u FROM compras WHERE client_uid = ?', 'uid-q1');
+  chk('compra carries usuario_id, no gerente', [null, mgr], [qc.g, qc.u]);
+  chk('cost rows logged by Mario', 'Mario', q1(`SELECT logged_by l FROM oneoff_costs WHERE description LIKE 'Tortilla harina%'`).l);
+  chk("a manager's new insumo waits for review", 0, q1(`SELECT revisado r FROM insumos WHERE nombre = 'Tortilla harina'`).r);
+  chk('TRC day total grew by the purchase', true, near(trcBefore + 450, calc.summary(TRC, today, today).costs.total));
+  r = await goPhone('GET', `/p/catalogo?location=${TRC}`, null, QA);
+  chk('sees only his own capture of today', [1, 450], [r.json.mias.length, r.json.mias[0].total]);
+  chk("Ana's phone does not see Mario's compra", 0, (await phoneB('GET', `/p/catalogo?location=${MTY}`, null, Bh)).json.mias.filter(c => c.total === 450).length);
+  const qid = r.json.mias[0].id;
+  chk('edits his own', 200, (await goPhone('PUT', `/p/compras/${qid}`, { location_id: TRC, lineas: [{ insumo_id: l1.insumo_id, cantidad: 1, total: 160 }] }, QA)).status);
+  chk('edit landed in the ledger', true, near(trcBefore + 160, calc.summary(TRC, today, today).costs.total));
+  chk('ledger agrees', [], inv.ledgerDrift());
+  await owner('DELETE', `/quick-links/${mgr}`);
+  chk('revoked quick link is locked out', 401, (await goPhone('GET', `/p/catalogo?location=${TRC}`, null, QA)).status);
+
   console.log('== revoking a phone ==');
   await owner('DELETE', `/inventario/links/${q1('SELECT id FROM gerente_links WHERE gerente_id = ?', ana).id}`);
   chk('revoked phone is locked out', 401, (await phone('GET', `/p/catalogo?location=${MTY}`, null, A)).status);

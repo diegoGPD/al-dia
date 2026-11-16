@@ -63,7 +63,8 @@ function resolveInsumo(id) {
   return row || null;
 }
 
-function findOrCreateInsumo({ nombre, categoria, unidad_base }, { gerenteId = null, userId = null } = {}) {
+// reviewed: owners' insumos are trusted; a gerente's (or a manager's via the quick link) wait in Pendientes.
+function findOrCreateInsumo({ nombre, categoria, unidad_base }, { gerenteId = null, userId = null, reviewed = !!userId } = {}) {
   const name = String(nombre || '').trim().replace(/\s+/g, ' ');
   const norm = normalize(name);
   if (!name || !norm) throw fail('Falta el nombre del insumo');
@@ -75,7 +76,7 @@ function findOrCreateInsumo({ nombre, categoria, unidad_base }, { gerenteId = nu
   if (!UNIDADES.includes(unidad_base)) throw fail('Elige la unidad base del insumo');
   const id = Number(db.prepare(
     `INSERT INTO insumos (nombre, nombre_normalizado, categoria, unidad_base, revisado, creado_por_gerente, creado_por_usuario)
-     VALUES (?,?,?,?,?,?,?)`).run(name, norm, categoria, unidad_base, userId ? 1 : 0, gerenteId, userId).lastInsertRowid);
+     VALUES (?,?,?,?,?,?,?)`).run(name, norm, categoria, unidad_base, reviewed ? 1 : 0, gerenteId, userId).lastInsertRowid);
   return { insumo: db.prepare('SELECT * FROM insumos WHERE id = ?').get(id), created: true };
 }
 
@@ -155,7 +156,7 @@ function writeLines(compra, lineas, ctx) {
       insumo = resolveInsumo(ln.insumo_id);
       if (!insumo) throw fail('Uno de los insumos ya no existe');
     } else if (ln.nuevo_insumo) {
-      insumo = findOrCreateInsumo(ln.nuevo_insumo, { gerenteId: ctx.gerenteId, userId: ctx.userId }).insumo;
+      insumo = findOrCreateInsumo(ln.nuevo_insumo, { gerenteId: ctx.gerenteId, userId: ctx.userId, reviewed: ctx.reviewed }).insumo;
     } else throw fail('Falta el insumo en una línea');
 
     const cantidad = Number(ln.cantidad), total = round2(Number(ln.total));
