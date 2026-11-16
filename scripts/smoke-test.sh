@@ -49,7 +49,7 @@ chk "invoiced split" 7620 "$(echo "$D" | python3 -c 'import json,sys;print(round
 
 echo "== loyalty: refresh all cards =="
 chk "refresh needs owner" 401 "$(curl -s -X POST $B/loyalty/refresh-cards -o /dev/null -w '%{http_code}')"
-chk "refresh with no wallets yet" '{"ok":true,"apple":0,"google":0}' "$(curl -s $C -X POST $B/loyalty/refresh-cards)"
+chk "refresh with no wallets yet" '{"ok":true,"apple":0,"google":0,"googleClass":false}' "$(curl -s $C -X POST $B/loyalty/refresh-cards)"
 
 echo "== accounts =="
 A=$(curl -s $C "$B/accounts-view?location=1&granularity=day&date=2026-01-05")

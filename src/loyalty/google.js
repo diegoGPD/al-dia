@@ -82,35 +82,51 @@ function loyaltyObject(customer, state) {
   };
 }
 
-// The class is the template every card points at. Google refuses to save a
-// card whose class doesn't exist, so this must actually succeed — and it is
-// only remembered when it did. Caching a failure here used to make the app
-// stop retrying for the life of the process, which hid the real error.
-let classEnsured = false;
-const LOGO_URL = () => `${process.env.BASE_URL || 'https://al-dia-production.up.railway.app'}/icon-192.png`;
+// The class is the template every card points at: issuer, program name, logo
+// and colour live there, not on each card. Google refuses to save a card whose
+// class doesn't exist, so creation must actually succeed — and it is only
+// remembered when it did. The class is also re-sent (PUT) once per process
+// and on "Refresh all cards", so a renamed program or a new logo reaches the
+// phones instead of staying frozen at whatever the class was created with.
+let classSynced = false;
+// Square, orange, cream wordmark: Google crops the logo to a circle at the top of the card.
+const LOGO_URL = () => `${BASE()}/cardart/business-logo-1024.png`;
+const ISSUER_NAME = 'bugo bogo';
 
-async function ensureClass(state) {
-  if (classEnsured) return;
-  const token = await accessToken();
-  const res = await gapi('GET', `/loyaltyClass/${classId()}`, null, token);
-  if (res.ok) { classEnsured = true; return; }
-  if (res.status !== 404) {
-    throw new Error(`Google Wallet class lookup failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
-  }
-  const body = {
+function classBody(state) {
+  return {
     id: classId(),
-    issuerName: state.programName,
+    issuerName: ISSUER_NAME,
     programName: state.programName,
-    programLogo: { sourceUri: { uri: LOGO_URL() } },
+    programLogo: { sourceUri: { uri: LOGO_URL() }, contentDescription: { defaultValue: { language: 'es', value: ISSUER_NAME } } },
     reviewStatus: 'UNDER_REVIEW',
     hexBackgroundColor: '#EC562B',
     countryCode: 'MX'
   };
+}
+
+async function ensureClass(state, { force = false } = {}) {
+  if (classSynced && !force) return;
+  const token = await accessToken();
+  const body = classBody(state);
+  const res = await gapi('GET', `/loyaltyClass/${classId()}`, null, token);
+  if (res.ok) {
+    const put = await gapi('PUT', `/loyaltyClass/${classId()}`, body, token);
+    if (!put.ok) {
+      const why = (await put.text()).slice(0, 300);
+      console.warn('Google Wallet: class update refused —', why);
+      // The card keeps working on the old class; a bad logo is the usual cause.
+      delete body.programLogo;
+      const again = await gapi('PUT', `/loyaltyClass/${classId()}`, body, token);
+      if (!again.ok) throw new Error(`Google Wallet class update failed: ${why}`);
+    }
+    classSynced = true; return;
+  }
+  if (res.status !== 404) {
+    throw new Error(`Google Wallet class lookup failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  }
   let created = await gapi('POST', '/loyaltyClass', body, token);
   if (!created.ok) {
-    // A logo Google can't fetch is the usual reason an insert is rejected;
-    // the card works without one, so rather than fail outright, try again
-    // plain and report what Google said if that fails too.
     const first = (await created.text()).slice(0, 300);
     delete body.programLogo;
     created = await gapi('POST', '/loyaltyClass', body, token);
@@ -119,7 +135,14 @@ async function ensureClass(state) {
     }
     console.warn('Google Wallet: class created without a logo —', first);
   }
-  classEnsured = true;
+  classSynced = true;
+}
+
+// Re-send the class now (name, logo, colour). Returns what Google said.
+async function syncClass(state) {
+  if (!googleReady()) return { ok: false, error: 'Google Wallet not configured' };
+  try { await ensureClass(state, { force: true }); return { ok: true }; }
+  catch (e) { console.error('Google Wallet class:', e.message); return { ok: false, error: e.message }; }
 }
 
 // "Save to Google Wallet" URL — the object rides inside the signed JWT.
@@ -137,6 +160,7 @@ async function saveLink(customer, state) {
 async function pushUpdate(customer, state, message) {
   if (!googleReady()) return;
   try {
+    await ensureClass(state);
     const token = await accessToken();
     const id = objectId(customer.code);
     const res = await gapi('PUT', `/loyaltyObject/${id}`, loyaltyObject(customer, state), token);
@@ -158,4 +182,4 @@ function saveServiceAccount(jsonText) {
   return parsed.client_email;
 }
 
-module.exports = { googleReady, saveLink, pushUpdate, saveServiceAccount };
+module.exports = { googleReady, saveLink, pushUpdate, syncClass, saveServiceAccount };

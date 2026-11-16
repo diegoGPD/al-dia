@@ -344,7 +344,7 @@
       if (rc) rc.onclick = async () => {
         if (rc.dataset.sure !== '1') { rc.dataset.sure = '1'; rc.textContent = 'Tap again to push to every phone'; return; }
         rc.disabled = true;
-        try { const r = await api('/loyalty/refresh-cards', { method: 'POST' }); toast(`Pushed: ${r.apple} Apple device(s), ${r.google} Google object(s)`); }
+        try { const r = await api('/loyalty/refresh-cards', { method: 'POST' }); toast(r.googleClassError ? `Google class not updated: ${r.googleClassError}` : `Pushed: ${r.apple} Apple device(s), ${r.google} Google card(s)`, !!r.googleClassError); }
         catch (err) { toast(err.message, true); }
         rc.disabled = false; rc.dataset.sure = ''; rc.textContent = '🔄 Refresh all cards';
       };
