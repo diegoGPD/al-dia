@@ -235,10 +235,10 @@
       const s = document.createElement('script'); s.src = '/gerente/jsQR.js';
       s.onload = ok; s.onerror = () => bad(new Error('decoder')); document.head.appendChild(s);
     });
-    detector = async cv => {
+    detector = async (cv, opts) => {
       const ctx = cv.getContext('2d', { willReadFrequently: true });
       const img = ctx.getImageData(0, 0, cv.width, cv.height);
-      const hit = window.jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+      const hit = window.jsQR(img.data, img.width, img.height, { inversionAttempts: opts && opts.invert ? 'attemptBoth' : 'dontInvert' });
       return hit && hit.data ? hit.data : null;
     };
     return detector;
@@ -259,7 +259,7 @@
       <div class="card">
         <div class="title">Escanear tarjeta</div>
         ${S.p.msg ? `<div class="banner ${S.p.msg.kind}">${esc(S.p.msg.text)}</div>` : ''}
-        <video class="cam" id="cam" playsinline muted autoplay></video>
+        <div style="position:relative"><video class="cam" id="cam" playsinline muted autoplay></video></div>
         <canvas id="camCanvas" style="display:none"></canvas>
         <p class="hint" id="camStatus">Abriendo cámara…</p>
       </div>
@@ -309,18 +309,18 @@
     const video = document.getElementById('cam'), canvas = document.getElementById('camCanvas'), status = document.getElementById('camStatus');
     stopCamera();
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } } });
+      stream = await navigator.mediaDevices.getUserMedia(window.QREnhance.constraints());
       if (S.view !== 'scan' || S.p.customer) return stopCamera();
       video.srcObject = stream; await video.play();
+      await window.QREnhance.tune(stream.getVideoTracks()[0]);
+      window.QREnhance.overlay(video.parentElement);
       const decode = await getDecoder(canvas);
       status.textContent = 'Apunta la cámara al código QR del cliente.';
       scanning = true;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
       const tick = async () => {
         if (!scanning) return;
         if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth) {
-          canvas.width = video.videoWidth; canvas.height = video.videoHeight; ctx.drawImage(video, 0, 0);
-          let found = null; try { found = await decode(canvas); } catch { /* keep going */ }
+          let found = null; try { found = await window.QREnhance.decodeFrame(video, decode); } catch { /* keep going */ }
           if (found) {
             const code = String(found).trim().toUpperCase(), now = Date.now();
             // The same card held in front of the lens is one scan, not twenty.

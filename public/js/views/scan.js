@@ -17,7 +17,7 @@
   registerRoute('scan', async () => `
     <h2 class="page-title">escanear tarjeta</h2>
     <div class="card">
-      <div id="scanArea">
+      <div id="scanArea" style="position:relative">
         <video id="scanVideo" playsinline muted autoplay
                style="width:100%;border-radius:12px;background:#000;min-height:220px;object-fit:cover"></video>
         <canvas id="scanCanvas" style="display:none"></canvas>
@@ -77,10 +77,9 @@
           document.head.appendChild(s);
         });
       }
-      const ctx2 = canvas.getContext('2d', { willReadFrequently: true });
-      detector = async cv => {
-        const img = ctx2.getImageData(0, 0, cv.width, cv.height);
-        const hit = window.jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+      detector = async (cv, opts) => {
+        const img = cv.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, cv.width, cv.height);
+        const hit = window.jsQR(img.data, img.width, img.height, { inversionAttempts: opts && opts.invert ? 'attemptBoth' : 'dontInvert' });
         return hit && hit.data ? hit.data : null;
       };
       return detector;
@@ -188,14 +187,13 @@
         // Permission first with a loose constraint. Asking for the rear camera
         // as a hard requirement is what breaks laptops and desktops; it is only
         // ever a preference.
-        const constraints = deviceId
-          ? { video: { deviceId: { exact: deviceId } } }
-          : { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } } };
-        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        stream = await navigator.mediaDevices.getUserMedia(window.QREnhance.constraints(deviceId));
         video.srcObject = stream;
         await video.play();
 
         const track = stream.getVideoTracks()[0];
+        await window.QREnhance.tune(track);        // continuous focus / slight zoom where the camera allows
+        window.QREnhance.overlay(video.parentElement);
         const settings = track.getSettings ? track.getSettings() : {};
         if (settings.deviceId) remember(settings.deviceId);
         // Mirror a front-facing webcam so staff can aim it; the canvas copies
@@ -211,14 +209,11 @@
           : 'apunta al código QR del cliente';
         scanning = true;
 
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
         const tick = async () => {
           if (!scanning) return;
           if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth) {
-            canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-            ctx.drawImage(video, 0, 0);
             let found = null;
-            try { found = await decode(canvas); } catch { /* keep scanning */ }
+            try { found = await window.QREnhance.decodeFrame(video, decode); } catch { /* keep scanning */ }
             if (found) {
               const code = String(found).trim();
               const now = Date.now();
@@ -230,7 +225,7 @@
               }
             }
           }
-          requestAnimationFrame(tick);
+          setTimeout(tick, 90);                    // several passes per frame: don't also run at 60 fps
         };
         tick();
       } catch (e) {
