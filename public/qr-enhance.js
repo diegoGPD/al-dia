@@ -22,14 +22,28 @@
 
   // Best effort: continuous focus, and a touch of zoom on cameras that offer
   // it (phone/tablet rear cameras), so the code fills more pixels.
+  // A phone screen is self-lit, so the camera should expose for a bright
+  // subject: auto-exposure meters the dim room and blows the QR out to white.
+  // Each setting is tried on its own so one refusal doesn't lose the others.
   async function tune(track) {
     if (!track || !track.applyConstraints) return;
     const caps = track.getCapabilities ? track.getCapabilities() : {};
-    const adv = [];
-    if (caps.focusMode && caps.focusMode.includes('continuous')) adv.push({ focusMode: 'continuous' });
-    if (caps.zoom && caps.zoom.max > 1) adv.push({ zoom: Math.min(caps.zoom.max, Math.max(caps.zoom.min || 1, 1.5)) });
-    if (!adv.length) return;
-    try { await track.applyConstraints({ advanced: adv }); } catch { /* camera said no; fine */ }
+    const tries = [];
+    if (caps.focusMode && caps.focusMode.includes('continuous')) tries.push({ focusMode: 'continuous' });
+    if (caps.zoom && caps.zoom.max > 1) tries.push({ zoom: Math.min(caps.zoom.max, Math.max(caps.zoom.min || 1, 1.5)) });
+    if (caps.exposureCompensation && caps.exposureCompensation.min < 0) {
+      // 70% of the way to the darkest the camera allows.
+      const ec = caps.exposureCompensation;
+      const v = ec.min + (0 - ec.min) * 0.3;
+      tries.push({ exposureCompensation: ec.step ? Math.round(v / ec.step) * ec.step : v });
+    } else if (caps.exposureMode && caps.exposureMode.includes('manual') && caps.exposureTime) {
+      const et = caps.exposureTime;
+      const v = et.min + (et.max - et.min) * 0.08;
+      tries.push({ exposureMode: 'manual', exposureTime: et.step ? Math.max(et.min, Math.round(v / et.step) * et.step) : v });
+    }
+    for (const c of tries) {
+      try { await track.applyConstraints({ advanced: [c] }); } catch { /* camera said no; fine */ }
+    }
   }
 
   const work = document.createElement('canvas');
@@ -67,6 +81,21 @@
     return cv;
   }
 
+  // Darken an overexposed centre: a strong gamma pulls the washed-out greys
+  // of the black modules back down while the lit white stays white.
+  function darken(cv) {
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    const img = ctx.getImageData(0, 0, cv.width, cv.height), d = img.data;
+    const lut = new Uint8ClampedArray(256);
+    for (let v = 0; v < 256; v++) lut[v] = Math.round(255 * Math.pow(v / 255, 3));
+    for (let i = 0; i < d.length; i += 4) {
+      const y = lut[(d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8];
+      d[i] = d[i + 1] = d[i + 2] = y;
+    }
+    ctx.putImageData(img, 0, 0);
+    return cv;
+  }
+
   /* decode(cv, opts) is the caller's decoder (BarcodeDetector or jsQR) taking a
      canvas; opts.invert asks jsQR to also try inverted codes. Returns the code
      or null. Passes are ordered cheapest-and-likeliest first. */
@@ -78,13 +107,15 @@
     const out = Math.max(side, 720);                     // enlarge small/blurry centres
 
     const passes = [
-      () => crop(video, sx, sy, side, side, out, out),
-      () => crop(video, 0, 0, W, H, Math.min(W, 1280), Math.round(H * Math.min(W, 1280) / W)),
-      () => stretch(crop(video, sx, sy, side, side, out, out))
+      [() => crop(video, sx, sy, side, side, out, out), true],
+      [() => crop(video, 0, 0, W, H, Math.min(W, 1280), Math.round(H * Math.min(W, 1280) / W)), false],
+      [() => darken(crop(video, sx, sy, side, side, out, out)), false],       // bright phone screen
+      [() => darken(crop(video, sx, sy, side, side, 400, 400)), false],       // bloom merges at a smaller size
+      [() => stretch(crop(video, sx, sy, side, side, out, out)), true]        // dim / washed-out screen
     ];
-    for (let i = 0; i < passes.length; i++) {
+    for (const [make, invert] of passes) {
       let hit = null;
-      try { hit = await decode(passes[i](), { invert: i !== 1 }); } catch { /* next pass */ }
+      try { hit = await decode(make(), { invert }); } catch { /* next pass */ }
       if (hit) return hit;
     }
     return null;
