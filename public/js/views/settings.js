@@ -70,7 +70,9 @@
         <div class="quick-actions" style="margin-top:12px">
           <a class="btn" href="/loyalty/qr" target="_blank">🖨 Printable signup QR</a>
           <a class="btn" href="/loyalty/join" target="_blank">👀 See signup page</a>
+          <button class="btn" type="button" id="refreshCards">🔄 Refresh all cards</button>
         </div>
+        <p class="hint">Refresh all cards re-sends every wallet pass (name, art, rewards) to the phones that have it. Use it after changing the program name or the card design.</p>
         <details style="margin-top:10px"><summary class="hint">Wallet setup (Apple / Google)</summary>
           <form id="walletForm" style="margin-top:10px">
             <p class="hint"><strong>Apple:</strong> export your Pass Type ID certificate from Keychain Access as a .p12 and upload it here — the server converts it itself, no Terminal needed.</p>
@@ -337,6 +339,14 @@
             reward_text: f.get('reward_text'), active: f.get('active') === 'on' } });
           toast('Program saved'); render();
         } catch (err) { toast(err.message, true); }
+      };
+      const rc = app.querySelector('#refreshCards');
+      if (rc) rc.onclick = async () => {
+        if (rc.dataset.sure !== '1') { rc.dataset.sure = '1'; rc.textContent = 'Tap again to push to every phone'; return; }
+        rc.disabled = true;
+        try { const r = await api('/loyalty/refresh-cards', { method: 'POST' }); toast(`Pushed: ${r.apple} Apple device(s), ${r.google} Google object(s)`); }
+        catch (err) { toast(err.message, true); }
+        rc.disabled = false; rc.dataset.sure = ''; rc.textContent = '🔄 Refresh all cards';
       };
       const wf = app.querySelector('#walletForm');
       wf.onsubmit = async (e) => {

@@ -176,6 +176,25 @@ function staffRoutes(r) {
     res.json({ ok: true });
   });
 
+  // Repaint every card already on a phone: bump each customer's updated_at
+  // (so Wallet's If-Modified-Since misses) and push. Apple: one APNs ping per
+  // registered device. Google: rewrite each object (every customer, since we
+  // don't know which of them saved it). Text, art and rewards all come from
+  // the current config when the pass is rebuilt.
+  r.post('/loyalty/refresh-cards', requireOwner, (req, res) => {
+    db.prepare(`UPDATE customers SET updated_at = datetime('now')`).run();
+    const apple = db.prepare('SELECT DISTINCT serial FROM wallet_registrations').all().map(x => x.serial);
+    let pushed = 0;
+    for (const serial of apple) {
+      try { passkit.pushUpdate(serial); pushed++; } catch (e) { console.error('APNs:', e.message); }
+    }
+    let google = 0;
+    if (gwallet.googleReady()) {
+      for (const c of db.prepare('SELECT * FROM customers').all()) { gwallet.pushUpdate(c, loyalty.stateOf(c), null); google++; }
+    }
+    res.json({ ok: true, apple: pushed, google });
+  });
+
   // In-app wallet credential setup (owner). Files land on the server volume;
   // nothing is ever sent back to the browser.
   r.post('/loyalty/wallet-config', requireOwner, async (req, res) => {

@@ -47,6 +47,10 @@ chk "BE rate is commissions only" 0.2 "$(echo "$D" | python3 -c 'import json,sys
 chk "BE agrees with profit" "True" "$(echo "$D" | python3 -c 'import json,sys;d=json.load(sys.stdin);print((d["current"]["profit"]>0)==(d["breakEven"]["status"]=="above"))')"
 chk "invoiced split" 7620 "$(echo "$D" | python3 -c 'import json,sys;print(round(json.load(sys.stdin)["current"]["invoiced"]["total"]))')"
 
+echo "== loyalty: refresh all cards =="
+chk "refresh needs owner" 401 "$(curl -s -X POST $B/loyalty/refresh-cards -o /dev/null -w '%{http_code}')"
+chk "refresh with no wallets yet" '{"ok":true,"apple":0,"google":0}' "$(curl -s $C -X POST $B/loyalty/refresh-cards)"
+
 echo "== accounts =="
 A=$(curl -s $C "$B/accounts-view?location=1&granularity=day&date=2026-01-05")
 chk "cash net (5000-500)" 4500 "$(echo "$A" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(round([a for a in d["accounts"] if a["name"]=="Cash"][0]["net"]))')"

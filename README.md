@@ -102,6 +102,8 @@ A touch-first screen at **`/gerente`** for the shared tablet in each sucursal. A
 
 Tests: `node scripts/gerente-tests.js`.
 
+**Refresh all cards** (Settings → Loyalty) re-sends every wallet pass: it bumps every customer's `updated_at`, pings each registered Apple device through APNs and rewrites each Google object, so passes already on phones pick up a new program name, card art or reward text. Use it after any change to those.
+
 ## Inventario (insumos + compras)
 Purchase-side cost tracking: what was bought, how much, at what price per kg / litro / pieza. No recipes, yields, counts or stock — `cantidad_base` is stored on every line so those can be built on top later.
 
