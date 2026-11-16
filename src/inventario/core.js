@@ -439,7 +439,29 @@ function proveedoresCompare(f) {
     .sort((a, b) => a.costo_promedio - b.costo_promedio);
 }
 
-module.exports = { CATEGORIAS, UNIDADES, categoryMap, setCategoryMap, resolveInsumo, findOrCreateInsumo,
+// One-shot base catalog (data-seed/catalogo-base.json). Idempotent: an insumo
+// or proveedor that already exists under any spelling is left exactly as is;
+// only the missing ones are created (as reviewed, by the owner). Never edits.
+function importCatalog(seed, { userId }) {
+  const out = { proveedores: 0, insumos: 0, existentes: 0 };
+  tx(() => {
+    for (const p of seed.proveedores || []) {
+      const before = db.prepare('SELECT COUNT(*) c FROM proveedores').get().c;
+      const prov = findOrCreateProveedor(p.nombre);
+      if (db.prepare('SELECT COUNT(*) c FROM proveedores').get().c > before) {
+        out.proveedores++;
+        if (p.notas) db.prepare('UPDATE proveedores SET notas = ? WHERE id = ?').run(String(p.notas), prov.id);
+      }
+    }
+    for (const i of seed.insumos || []) {
+      const r = findOrCreateInsumo(i, { userId, reviewed: true });
+      if (r.created) out.insumos++; else out.existentes++;
+    }
+  });
+  return out;
+}
+
+module.exports = { importCatalog, CATEGORIAS, UNIDADES, categoryMap, setCategoryMap, resolveInsumo, findOrCreateInsumo,
   findOrCreatePresentacion, findOrCreateProveedor, catalog, compraFull, saveCompra, updateCompra, deleteCompra,
   isCompraCost, ledgerDrift, listInsumos, updateInsumo, mergeInsumos, config, gastoPorInsumo, precioSerie,
   alertas, proveedoresCompare, fail };

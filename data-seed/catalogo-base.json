@@ -1,0 +1,438 @@
+{
+ "proveedores": [
+  {
+   "nombre": "HEB",
+   "notas": null
+  },
+  {
+   "nombre": "Costco",
+   "notas": null
+  },
+  {
+   "nombre": "Karne Mart",
+   "notas": null
+  },
+  {
+   "nombre": "Jugos Los Tres",
+   "notas": "Compra mínima de 7 galones para envío gratis (se pueden congelar)"
+  },
+  {
+   "nombre": "City Club",
+   "notas": null
+  },
+  {
+   "nombre": "Kesos y Cosas",
+   "notas": null
+  },
+  {
+   "nombre": "Abastos Guadalupe",
+   "notas": "Elote blanco desgranado: comprar arriba de 10 para precio de mayoreo"
+  },
+  {
+   "nombre": "Tortillas Estella",
+   "notas": "Pedir con 4 días de anticipación, entre lunes y jueves"
+  },
+  {
+   "nombre": "Leal",
+   "notas": "En frente de la vuelta a Garza Sada, por la casa. Guantes de plástico: mejor en Mercado Libre"
+  },
+  {
+   "nombre": "Envak",
+   "notas": "Pedir más de lo normal para que valga la pena el flete"
+  },
+  {
+   "nombre": "El Edén",
+   "notas": "https://maps.app.goo.gl/nfnpmNx95QKvXXeV7"
+  },
+  {
+   "nombre": "Toyo Foods",
+   "notas": null
+  },
+  {
+   "nombre": "Mercado Libre",
+   "notas": null
+  }
+ ],
+ "insumos": [
+  {
+   "nombre": "Pollo pechuga premium",
+   "categoria": "Proteína",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Carne top sirloin",
+   "categoria": "Proteína",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Trocitos de tocino",
+   "categoria": "Proteína",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Queso fresco",
+   "categoria": "Lácteos",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Queso cheddar suave",
+   "categoria": "Lácteos",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Panela",
+   "categoria": "Lácteos",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Mantequilla",
+   "categoria": "Lácteos",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Parmesano",
+   "categoria": "Lácteos",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Crema",
+   "categoria": "Lácteos",
+   "unidad_base": "litro"
+  },
+  {
+   "nombre": "Yoghurt natural sin azúcar",
+   "categoria": "Lácteos",
+   "unidad_base": "litro"
+  },
+  {
+   "nombre": "Tomate",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Aguacate",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Cebolla",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Cebolla morada",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Jalapeño",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Serrano",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Habanero",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Pimiento",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Cilantro",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Betabel",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Brócoli",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Ajo",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Jengibre",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Ajonjolí",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Frijol negro",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Arroz",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Harina",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Champiñón",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Champiñones baby bella",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Lechuga sucrine",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Edamames en vaina",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Azúcar",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Sal",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Pimienta",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Ajo en polvo",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Cúrcuma",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Elote blanco desgranado",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Camote chips",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Pepitas",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Harina para tortilla regular",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Harina para tortilla integral",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Harina para tortilla chipotle",
+   "categoria": "Abarrotes",
+   "unidad_base": "kg"
+  },
+  {
+   "nombre": "Aceite vegetal",
+   "categoria": "Abarrotes",
+   "unidad_base": "litro"
+  },
+  {
+   "nombre": "Aceite de oliva",
+   "categoria": "Abarrotes",
+   "unidad_base": "litro"
+  },
+  {
+   "nombre": "Vinagre blanco",
+   "categoria": "Abarrotes",
+   "unidad_base": "litro"
+  },
+  {
+   "nombre": "Jugo de limón",
+   "categoria": "Abarrotes",
+   "unidad_base": "litro"
+  },
+  {
+   "nombre": "Jugo de naranja",
+   "categoria": "Abarrotes",
+   "unidad_base": "litro"
+  },
+  {
+   "nombre": "Soya",
+   "categoria": "Abarrotes",
+   "unidad_base": "litro"
+  },
+  {
+   "nombre": "Aderezo de mayonesa Star Value",
+   "categoria": "Abarrotes",
+   "unidad_base": "litro"
+  },
+  {
+   "nombre": "Fideo seco",
+   "categoria": "Abarrotes",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Chipotle mini",
+   "categoria": "Abarrotes",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Sal con ajo y perejil Lawry's",
+   "categoria": "Abarrotes",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Maggi",
+   "categoria": "Abarrotes",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Consomé de pollo",
+   "categoria": "Abarrotes",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Té oolong",
+   "categoria": "Abarrotes",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Agua embotellada",
+   "categoria": "Bebidas",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Coca Cola regular",
+   "categoria": "Bebidas",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Coca Cola Zero",
+   "categoria": "Bebidas",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Servitoallas",
+   "categoria": "Desechables",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Servilletas",
+   "categoria": "Desechables",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Aluminio",
+   "categoria": "Desechables",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Tenedores negros",
+   "categoria": "Desechables",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Guantes de plástico",
+   "categoria": "Desechables",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Soufflés 2 oz negros",
+   "categoria": "Desechables",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Bolsas papel kraft",
+   "categoria": "Desechables",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Latas",
+   "categoria": "Desechables",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Bolsas personalizadas",
+   "categoria": "Desechables",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Bowls",
+   "categoria": "Desechables",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Tapas",
+   "categoria": "Desechables",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Fabuloso",
+   "categoria": "Otros",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Jabón para trastes",
+   "categoria": "Otros",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Axion con cloro",
+   "categoria": "Otros",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Windex",
+   "categoria": "Otros",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Lysol",
+   "categoria": "Otros",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Microdyn",
+   "categoria": "Otros",
+   "unidad_base": "pieza"
+  },
+  {
+   "nombre": "Afloja todo",
+   "categoria": "Otros",
+   "unidad_base": "pieza"
+  }
+ ]
+}

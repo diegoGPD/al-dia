@@ -173,6 +173,7 @@
           <button class="btn primary" id="iMerge" ${ui.sel.size >= 2 ? '' : 'disabled'}>Fusionar seleccionados (${ui.sel.size})</button>
           <button class="btn" id="iNew">+ Nuevo insumo</button>
           <button class="btn" id="iInact">${ui.verInactivos ? 'Ocultar inactivos' : 'Ver inactivos'}</button>
+          <button class="btn" id="iBase">Cargar catálogo base</button>
         </div>
         <p class="hint">Para fusionar duplicados marca dos o más y elige cuál se conserva. Todas sus compras pasan al que se conserva; no se borra ni se recalcula ningún precio.</p>
       </div>
@@ -271,6 +272,16 @@
     app.querySelectorAll('.i-ok').forEach(b => b.onclick = guard(async () => {
       await api(`/inventario/insumos/${b.dataset.id}`, { method: 'PUT', body: { revisado: true } }); render();
     }));
+    const base = app.querySelector('#iBase');
+    if (base) base.onclick = guard(async () => {
+      if (base.dataset.sure !== '1') {
+        const info = await api('/inventario/catalogo-base');
+        if (!info.faltan) { toast('El catálogo base ya está cargado.'); return; }
+        base.dataset.sure = '1'; base.textContent = `¿Cargar ${info.faltan} insumos y ${info.proveedores} proveedores? Toca otra vez`; return;
+      }
+      const r = await api('/inventario/catalogo-base', { method: 'POST' });
+      toast(`Listo: ${r.insumos} insumos y ${r.proveedores} proveedores nuevos; ${r.existentes} ya existían.`); render();
+    });
     const inact = app.querySelector('#iInact'); if (inact) inact.onclick = () => { ui.verInactivos = !ui.verInactivos; render(); };
     const merge = app.querySelector('#iMerge');
     if (merge) merge.onclick = guard(async () => {

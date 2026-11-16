@@ -206,6 +206,17 @@ function staffRoutes(r) {
   r.post(`${I}/insumos`, requireOwner, h((req, res) => {
     res.json(inv.findOrCreateInsumo(req.body, { userId: req.user.id }));
   }));
+  // Base catalog: everything the restaurant buys, loaded once from the repo file.
+  r.get(`${I}/catalogo-base`, requireOwner, (req, res) => {
+    const seed = require('../../data-seed/catalogo-base.json');
+    const have = new Set(db.prepare('SELECT nombre_normalizado n FROM insumos WHERE activo = 1 AND merged_into IS NULL').all().map(r => r.n));
+    const { normalize } = require('../../public/compra/normalize');
+    const faltan = seed.insumos.filter(i => !have.has(normalize(i.nombre))).length;
+    res.json({ proveedores: seed.proveedores.length, insumos: seed.insumos.length, faltan });
+  });
+  r.post(`${I}/catalogo-base`, requireOwner, h((req, res) => {
+    res.json(inv.importCatalog(require('../../data-seed/catalogo-base.json'), { userId: req.user.id }));
+  }));
   r.put(`${I}/insumos/:id`, requireOwner, h((req, res) => res.json(inv.updateInsumo(req.params.id, req.body))));
   r.post(`${I}/insumos/merge`, requireOwner, h((req, res) => res.json(inv.mergeInsumos(req.body.survivor_id, req.body.ids))));
 

@@ -306,6 +306,25 @@ const q1 = (sql, ...a) => db.prepare(sql).get(...a);
   await owner('DELETE', `/quick-links/${mgr}`);
   chk('revoked quick link is locked out', 401, (await goPhone('GET', `/p/catalogo?location=${TRC}`, null, QA)).status);
 
+  console.log('== base catalog: loads once, never duplicates, never edits ==');
+  const seed = require('../data-seed/catalogo-base.json');
+  chk('seed has no duplicate names', seed.insumos.length, new Set(seed.insumos.map(i => M.normalize(i.nombre))).size);
+  chk('seed categories/units valid', true, seed.insumos.every(i => inv.CATEGORIAS.includes(i.categoria) && inv.UNIDADES.includes(i.unidad_base)));
+  const insBefore = q1('SELECT COUNT(*) c FROM insumos').c;
+  // 'Pollo pechuga' exists under a gerente with unit kg; seed has 'Pollo pechuga premium' (different name) — both stay.
+  r = await owner('GET', '/inventario/catalogo-base');
+  chk('preview counts what is missing', seed.insumos.length, r.json.faltan);
+  r = await owner('POST', '/inventario/catalogo-base');
+  chk('all new created, reviewed, by the owner', [seed.insumos.length, seed.insumos.length], [r.json.insumos,
+    q1('SELECT COUNT(*) c FROM insumos WHERE revisado = 1 AND creado_por_usuario IS NOT NULL AND id > ?', insBefore).c]);
+  chk('proveedores created with notas', 'Pedir con 4 días de anticipación, entre lunes y jueves', q1(`SELECT notas n FROM proveedores WHERE nombre = 'Tortillas Estella'`).n);
+  chk('an existing proveedor is reused, not duplicated', 1, q1(`SELECT COUNT(*) c FROM proveedores WHERE nombre_normalizado = ?`, M.normalize('Carnes del Norte')).c);
+  const total = q1('SELECT COUNT(*) c FROM insumos').c, provTotal = q1('SELECT COUNT(*) c FROM proveedores').c;
+  r = await owner('POST', '/inventario/catalogo-base');
+  chk('second load: nothing new', [0, 0, seed.insumos.length], [r.json.insumos, r.json.proveedores, r.json.existentes]);
+  chk('tables unchanged', [total, provTotal], [q1('SELECT COUNT(*) c FROM insumos').c, q1('SELECT COUNT(*) c FROM proveedores').c]);
+  chk('phone is refused', 401, (await phoneB('POST', '/inventario/catalogo-base', null, Bh)).status);
+
   console.log('== revoking a phone ==');
   await owner('DELETE', `/inventario/links/${q1('SELECT id FROM gerente_links WHERE gerente_id = ?', ana).id}`);
   chk('revoked phone is locked out', 401, (await phone('GET', `/p/catalogo?location=${MTY}`, null, A)).status);
