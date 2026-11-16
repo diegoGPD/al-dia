@@ -22,28 +22,53 @@
 
   // Best effort: continuous focus, and a touch of zoom on cameras that offer
   // it (phone/tablet rear cameras), so the code fills more pixels.
-  // A phone screen is self-lit, so the camera should expose for a bright
-  // subject: auto-exposure meters the dim room and blows the QR out to white.
-  // Each setting is tried on its own so one refusal doesn't lose the others.
+  // Focus and a touch of zoom are always safe. Exposure is not: a phone screen
+  // is self-lit and wants the camera underexposed, but a webcam underexposed in
+  // a normal room shows nothing at all. So tune() only sets focus/zoom, and
+  // exposure is toggled by the scan loop (see alternate below): auto first,
+  // then darker after a couple of seconds without a read, back and forth.
   async function tune(track) {
     if (!track || !track.applyConstraints) return;
     const caps = track.getCapabilities ? track.getCapabilities() : {};
     const tries = [];
     if (caps.focusMode && caps.focusMode.includes('continuous')) tries.push({ focusMode: 'continuous' });
     if (caps.zoom && caps.zoom.max > 1) tries.push({ zoom: Math.min(caps.zoom.max, Math.max(caps.zoom.min || 1, 1.5)) });
-    if (caps.exposureCompensation && caps.exposureCompensation.min < 0) {
-      // 70% of the way to the darkest the camera allows.
-      const ec = caps.exposureCompensation;
-      const v = ec.min + (0 - ec.min) * 0.3;
-      tries.push({ exposureCompensation: ec.step ? Math.round(v / ec.step) * ec.step : v });
-    } else if (caps.exposureMode && caps.exposureMode.includes('manual') && caps.exposureTime) {
-      const et = caps.exposureTime;
-      const v = et.min + (et.max - et.min) * 0.08;
-      tries.push({ exposureMode: 'manual', exposureTime: et.step ? Math.max(et.min, Math.round(v / et.step) * et.step) : v });
-    }
     for (const c of tries) {
       try { await track.applyConstraints({ advanced: [c] }); } catch { /* camera said no; fine */ }
     }
+  }
+
+  // Exposure presets this camera supports: 'auto' and 'dark', or null.
+  function exposureModes(track) {
+    const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+    if (caps.exposureCompensation && caps.exposureCompensation.min < 0) {
+      const ec = caps.exposureCompensation;
+      const v = ec.min + (0 - ec.min) * 0.35;
+      return { auto: { exposureCompensation: 0 },
+               dark: { exposureCompensation: ec.step ? Math.round(v / ec.step) * ec.step : v } };
+    }
+    if (caps.exposureMode && caps.exposureMode.includes('manual') && caps.exposureMode.includes('continuous') && caps.exposureTime) {
+      const et = caps.exposureTime;
+      const v = et.min + (et.max - et.min) * 0.15;
+      return { auto: { exposureMode: 'continuous' },
+               dark: { exposureMode: 'manual', exposureTime: et.step ? Math.max(et.min, Math.round(v / et.step) * et.step) : v } };
+    }
+    return null;
+  }
+
+  // Call once per scan loop. Returns a function to call on every frame with
+  // whether a code was read; it flips exposure after `everyMs` without one.
+  function alternate(track, everyMs = 2500) {
+    const modes = exposureModes(track);
+    let cur = 'auto', since = Date.now(), busy = false;
+    if (!modes) return () => {};
+    return async () => {
+      if (busy || Date.now() - since < everyMs) return;
+      busy = true;
+      cur = cur === 'auto' ? 'dark' : 'auto';
+      try { await track.applyConstraints({ advanced: [modes[cur]] }); } catch { /* ignore */ }
+      since = Date.now(); busy = false;
+    };
   }
 
   const work = document.createElement('canvas');
@@ -137,5 +162,5 @@
     wrapper.appendChild(g);
   }
 
-  window.QREnhance = { constraints, tune, decodeFrame, overlay };
+  window.QREnhance = { constraints, tune, alternate, decodeFrame, overlay };
 })();

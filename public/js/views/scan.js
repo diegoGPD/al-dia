@@ -193,6 +193,7 @@
 
         const track = stream.getVideoTracks()[0];
         await window.QREnhance.tune(track);        // continuous focus / slight zoom where the camera allows
+        const flipExposure = window.QREnhance.alternate(track);   // auto ↔ darker, until something reads
         window.QREnhance.overlay(video.parentElement);
         const settings = track.getSettings ? track.getSettings() : {};
         if (settings.deviceId) remember(settings.deviceId);
@@ -214,6 +215,7 @@
           if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth) {
             let found = null;
             try { found = await window.QREnhance.decodeFrame(video, decode); } catch { /* keep scanning */ }
+            if (!found) flipExposure();
             if (found) {
               const code = String(found).trim();
               const now = Date.now();

@@ -313,6 +313,7 @@
       if (S.view !== 'scan' || S.p.customer) return stopCamera();
       video.srcObject = stream; await video.play();
       await window.QREnhance.tune(stream.getVideoTracks()[0]);
+      const flipExposure = window.QREnhance.alternate(stream.getVideoTracks()[0]);
       window.QREnhance.overlay(video.parentElement);
       const decode = await getDecoder(canvas);
       status.textContent = 'Apunta la cámara al código QR del cliente.';
@@ -321,6 +322,7 @@
         if (!scanning) return;
         if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth) {
           let found = null; try { found = await window.QREnhance.decodeFrame(video, decode); } catch { /* keep going */ }
+          if (!found) flipExposure();
           if (found) {
             const code = String(found).trim().toUpperCase(), now = Date.now();
             // The same card held in front of the lens is one scan, not twenty.
