@@ -262,6 +262,8 @@
         <div style="position:relative"><video class="cam" id="cam" playsinline muted autoplay></video></div>
         <canvas id="camCanvas" style="display:none"></canvas>
         <p class="hint" id="camStatus">Abriendo cámara…</p>
+        <label id="brightWrap" style="display:none;align-items:center;gap:10px;font-weight:700"><input type="checkbox" id="brightMode" style="width:24px;height:24px"> ☀️ Pantalla brillante (oscurece la cámara)</label>
+        <p class="hint" id="camDiag"></p>
       </div>
       <div class="card">
         <label class="f" style="margin-top:0">¿No funciona la cámara? Busca por teléfono</label>
@@ -313,8 +315,20 @@
       if (S.view !== 'scan' || S.p.customer) return stopCamera();
       video.srcObject = stream; await video.play();
       await window.QREnhance.tune(stream.getVideoTracks()[0]);
-      const flipExposure = window.QREnhance.alternate(stream.getVideoTracks()[0]).tick;
+      const track = stream.getVideoTracks()[0];
+      const exp = window.QREnhance.alternate(track);
+      const flipExposure = exp.tick;
       window.QREnhance.overlay(video.parentElement);
+      const brightWrap = document.getElementById('brightWrap'), brightBox = document.getElementById('brightMode');
+      if (exp.available) {
+        brightWrap.style.display = 'flex';
+        brightBox.checked = LS.get('g.bright', false);
+        if (brightBox.checked) exp.force('darkest');
+        brightBox.onchange = () => { LS.set('g.bright', brightBox.checked); exp.force(brightBox.checked ? 'darkest' : null); };
+      }
+      const controls = window.QREnhance.lightControls(track);
+      const diagEl = document.getElementById('camDiag');
+      setTimeout(() => { if (diagEl) diagEl.textContent = `${video.videoWidth}×${video.videoHeight} · luz: ${controls.length ? controls.join(', ') : 'sin control (la cámara no lo permite)'}`; }, 800);
       const decode = await getDecoder(canvas);
       status.textContent = 'Apunta la cámara al código QR del cliente.';
       scanning = true;
