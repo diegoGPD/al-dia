@@ -38,37 +38,77 @@
     }
   }
 
-  // Exposure presets this camera supports: 'auto' and 'dark', or null.
+  // Which light controls this camera exposes to the browser (UVC webcams on
+  // Windows/Linux usually offer brightness/contrast; phones offer exposure).
+  function lightControls(track) {
+    const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+    const out = [];
+    if (caps.exposureCompensation && caps.exposureCompensation.min < 0) out.push('exposureCompensation');
+    if (caps.exposureMode && caps.exposureMode.includes('manual') && caps.exposureTime) out.push('exposureTime');
+    if (caps.brightness && caps.brightness.max > caps.brightness.min) out.push('brightness');
+    if (caps.contrast && caps.contrast.max > caps.contrast.min) out.push('contrast');
+    return out;
+  }
+  const snap = (v, r) => r.step ? Math.round(v / r.step) * r.step : v;
+  const lerp = (r, t) => r.min + (r.max - r.min) * t;
+
+  // Exposure presets: 'auto', 'dark' (mild) and 'darkest' (for a phone at full
+  // brightness). Each is a list of constraints applied one by one.
   function exposureModes(track) {
     const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+    const auto = [], dark = [], darkest = [];
     if (caps.exposureCompensation && caps.exposureCompensation.min < 0) {
       const ec = caps.exposureCompensation;
-      const v = ec.min + (0 - ec.min) * 0.35;
-      return { auto: { exposureCompensation: 0 },
-               dark: { exposureCompensation: ec.step ? Math.round(v / ec.step) * ec.step : v } };
+      auto.push({ exposureCompensation: 0 });
+      dark.push({ exposureCompensation: snap(ec.min * 0.65, ec) });
+      darkest.push({ exposureCompensation: ec.min });
     }
-    if (caps.exposureMode && caps.exposureMode.includes('manual') && caps.exposureMode.includes('continuous') && caps.exposureTime) {
+    if (caps.exposureMode && caps.exposureMode.includes('manual') && caps.exposureTime) {
       const et = caps.exposureTime;
-      const v = et.min + (et.max - et.min) * 0.15;
-      return { auto: { exposureMode: 'continuous' },
-               dark: { exposureMode: 'manual', exposureTime: et.step ? Math.max(et.min, Math.round(v / et.step) * et.step) : v } };
+      if (caps.exposureMode.includes('continuous')) auto.push({ exposureMode: 'continuous' });
+      dark.push({ exposureMode: 'manual', exposureTime: snap(lerp(et, 0.15), et) });
+      darkest.push({ exposureMode: 'manual', exposureTime: snap(lerp(et, 0.03), et) });
     }
-    return null;
+    if (caps.brightness && caps.brightness.max > caps.brightness.min) {
+      const b = caps.brightness, cur = (track.getSettings() || {}).brightness;
+      auto.push({ brightness: cur !== undefined ? cur : snap(lerp(b, 0.5), b) });
+      dark.push({ brightness: snap(lerp(b, 0.2), b) });
+      darkest.push({ brightness: b.min });
+    }
+    if (caps.contrast && caps.contrast.max > caps.contrast.min) {
+      const c = caps.contrast, cur = (track.getSettings() || {}).contrast;
+      auto.push({ contrast: cur !== undefined ? cur : snap(lerp(c, 0.5), c) });
+      dark.push({ contrast: snap(lerp(c, 0.75), c) });
+      darkest.push({ contrast: c.max });
+    }
+    return auto.length || dark.length ? { auto, dark, darkest } : null;
+  }
+  async function applyMode(track, list) {
+    for (const c of list) { try { await track.applyConstraints({ advanced: [c] }); } catch { /* ignore */ } }
   }
 
   // Call once per scan loop. Returns a function to call on every frame with
   // whether a code was read; it flips exposure after `everyMs` without one.
+  // Returns { tick, force }: tick() on every frame without a read; force(mode)
+  // pins a mode ('darkest' for a bright phone, null to go back to alternating).
   function alternate(track, everyMs = 2500) {
     const modes = exposureModes(track);
-    let cur = 'auto', since = Date.now(), busy = false;
-    if (!modes) return () => {};
-    return async () => {
-      if (busy || Date.now() - since < everyMs) return;
+    let cur = 'auto', since = Date.now(), busy = false, pinned = null;
+    const tick = async () => {
+      if (!modes || pinned || busy || Date.now() - since < everyMs) return;
       busy = true;
       cur = cur === 'auto' ? 'dark' : 'auto';
-      try { await track.applyConstraints({ advanced: [modes[cur]] }); } catch { /* ignore */ }
+      await applyMode(track, modes[cur]);
       since = Date.now(); busy = false;
     };
+    const force = async mode => {
+      pinned = mode;
+      if (!modes) return false;
+      await applyMode(track, modes[mode || 'auto']);
+      cur = mode || 'auto'; since = Date.now();
+      return true;
+    };
+    return { tick, force, available: !!modes };
   }
 
   const work = document.createElement('canvas');
@@ -162,5 +202,5 @@
     wrapper.appendChild(g);
   }
 
-  window.QREnhance = { constraints, tune, alternate, decodeFrame, overlay };
+  window.QREnhance = { constraints, tune, alternate, lightControls, decodeFrame, overlay };
 })();

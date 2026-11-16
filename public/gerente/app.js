@@ -313,7 +313,7 @@
       if (S.view !== 'scan' || S.p.customer) return stopCamera();
       video.srcObject = stream; await video.play();
       await window.QREnhance.tune(stream.getVideoTracks()[0]);
-      const flipExposure = window.QREnhance.alternate(stream.getVideoTracks()[0]);
+      const flipExposure = window.QREnhance.alternate(stream.getVideoTracks()[0]).tick;
       window.QREnhance.overlay(video.parentElement);
       const decode = await getDecoder(canvas);
       status.textContent = 'Apunta la cámara al código QR del cliente.';

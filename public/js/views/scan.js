@@ -24,6 +24,7 @@
         <div class="hint center" id="scanStatus">iniciando cámara…</div>
         <label id="camPickWrap" style="display:none;margin-top:8px">cámara
           <select id="camPick"></select></label>
+        <label class="inv-toggle" id="brightWrap" style="display:none;margin-top:8px"><input type="checkbox" id="brightMode">☀️ pantalla brillante (oscurece la cámara)</label>
       </div>
       <div id="scanResult"></div>
       <form id="manualForm" class="row2" style="margin-top:10px">
@@ -205,7 +206,15 @@
           await QE.tune(track);                    // continuous focus / slight zoom where the camera allows
           QE.overlay(video.parentElement);
         }
-        const flipExposure = QE ? QE.alternate(track) : () => {};   // auto ↔ darker, until something reads
+        const exp = QE ? QE.alternate(track) : { tick: () => {}, force: async () => false, available: false };
+        const flipExposure = exp.tick;             // auto ↔ darker, until something reads
+        const brightWrap = app.querySelector('#brightWrap'), brightBox = app.querySelector('#brightMode');
+        if (brightWrap) brightWrap.style.display = exp.available ? '' : 'none';
+        if (brightBox && exp.available) {
+          brightBox.checked = localStorage.getItem('scan_bright') === '1';
+          if (brightBox.checked) exp.force('darkest');
+          brightBox.onchange = () => { localStorage.setItem('scan_bright', brightBox.checked ? '1' : '0'); exp.force(brightBox.checked ? 'darkest' : null); };
+        }
         const settings = track.getSettings ? track.getSettings() : {};
         if (settings.deviceId) remember(settings.deviceId);
         // Mirror a front-facing webcam so staff can aim it; the canvas copies
@@ -218,7 +227,8 @@
         const decode = await getDecoder();
         scanning = true;
         // Diagnostics line: what the camera actually gave us and which decoder runs.
-        const diag = () => `${video.videoWidth}×${video.videoHeight} · ${('BarcodeDetector' in window) && decoderKind === 'native' ? 'nativo' : 'jsQR'}${QE ? '' : ' · sin mejoras (recarga con Ctrl+Shift+R)'}${lastErr ? ' · error: ' + lastErr : ''}`;
+        const controls = QE ? QE.lightControls(track) : [];
+        const diag = () => `${video.videoWidth}×${video.videoHeight} · ${('BarcodeDetector' in window) && decoderKind === 'native' ? 'nativo' : 'jsQR'} · luz: ${controls.length ? controls.join(', ') : 'sin control (la cámara no lo permite)'}${QE ? '' : ' · sin mejoras (recarga con Ctrl+Shift+R)'}${lastErr ? ' · error: ' + lastErr : ''}`;
         let frames = 0, lastErr = '';
         status.innerHTML = `apunta al código QR del cliente<br><small class="hint" id="scanDiag"></small>`;
         const diagEl = status.querySelector('#scanDiag');
