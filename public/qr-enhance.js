@@ -32,7 +32,8 @@
     const caps = track.getCapabilities ? track.getCapabilities() : {};
     const tries = [];
     if (caps.focusMode && caps.focusMode.includes('continuous')) tries.push({ focusMode: 'continuous' });
-    if (caps.zoom && caps.zoom.max > 1) tries.push({ zoom: Math.min(caps.zoom.max, Math.max(caps.zoom.min || 1, 1.5)) });
+    // No zoom: on a webcam it is digital, i.e. a blur. The decoder enlarges the
+    // centre itself, which is the same thing without throwing away pixels.
     for (const c of tries) {
       try { await track.applyConstraints({ advanced: [c] }); } catch { /* camera said no; fine */ }
     }
@@ -191,11 +192,11 @@
     if (!wrapper || wrapper.querySelector('.qr-guide')) return;
     const g = document.createElement('div');
     g.className = 'qr-guide';
-    g.innerHTML = '<div class="qr-box"></div><div class="qr-tip">acerca la tarjeta hasta llenar el cuadro</div>';
+    g.innerHTML = '<div class="qr-box"></div><div class="qr-tip">tarjeta dentro del cuadro, a unos 25 cm — si se ve borrosa, aléjala</div>';
     if (!document.getElementById('qr-guide-css')) {
       const st = document.createElement('style'); st.id = 'qr-guide-css';
       st.textContent = `.qr-guide{position:absolute;inset:0;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center}
-.qr-box{width:62%;max-width:360px;aspect-ratio:1;border:3px dashed rgba(255,255,255,.85);border-radius:18px;box-shadow:0 0 0 9999px rgba(0,0,0,.28)}
+.qr-box{width:48%;max-width:300px;aspect-ratio:1;border:3px dashed rgba(255,255,255,.85);border-radius:18px;box-shadow:0 0 0 9999px rgba(0,0,0,.28)}
 .qr-tip{margin-top:10px;color:#fff;font-size:13px;font-weight:700;text-shadow:0 1px 3px rgba(0,0,0,.8)}`;
       document.head.appendChild(st);
     }
