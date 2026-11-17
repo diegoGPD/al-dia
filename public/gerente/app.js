@@ -262,7 +262,8 @@
         <div style="position:relative"><video class="cam" id="cam" playsinline muted autoplay></video></div>
         <canvas id="camCanvas" style="display:none"></canvas>
         <p class="hint" id="camStatus">Abriendo cámara…</p>
-        <label id="brightWrap" style="display:none;align-items:center;gap:10px;font-weight:700"><input type="checkbox" id="brightMode" style="width:24px;height:24px"> ☀️ Pantalla brillante (oscurece la cámara)</label>
+<div id="focusWrap" style="display:none;margin-top:8px;align-items:center;gap:10px"><button class="btn" type="button" id="refocusBtn">🔍 reenfocar</button><input type="range" id="focusRange" style="flex:1;display:none"></div>
+                <label id="brightWrap" style="display:none;align-items:center;gap:10px;font-weight:700"><input type="checkbox" id="brightMode" style="width:24px;height:24px"> ☀️ Pantalla brillante (oscurece la cámara)</label>
         <p class="hint" id="camDiag"></p>
       </div>
       <div class="card">
@@ -326,9 +327,21 @@
         if (brightBox.checked) exp.force('darkest');
         brightBox.onchange = () => { LS.set('g.bright', brightBox.checked); exp.force(brightBox.checked ? 'darkest' : null); };
       }
+
+        const fWrap = document.querySelector('#focusWrap'), fBtn = document.querySelector('#refocusBtn'), fRange = document.querySelector('#focusRange');
+        const fi = window.QREnhance.focusInfo(track);
+        if (fWrap && (fi.modes.length || fi.distance)) {
+          fWrap.style.display = 'flex';
+          fBtn.onclick = () => window.QREnhance.refocus(track);
+          if (fi.distance && fi.modes.includes('manual')) {
+            fRange.style.display = ''; fRange.min = fi.distance.min; fRange.max = fi.distance.max; fRange.step = fi.distance.step || 0.01;
+            fRange.value = fi.current !== undefined ? fi.current : fi.distance.min;
+            fRange.oninput = () => window.QREnhance.setFocus(track, Number(fRange.value));
+          }
+        }
       const controls = window.QREnhance.lightControls(track);
       const diagEl = document.getElementById('camDiag');
-      setTimeout(() => { if (diagEl) diagEl.textContent = `${video.videoWidth}×${video.videoHeight} · luz: ${controls.length ? controls.join(', ') : 'sin control (la cámara no lo permite)'}`; }, 800);
+      setTimeout(() => { if (diagEl) diagEl.textContent = `enfoque: ${fi.modes.length ? fi.modes.join('/') : 'sin control'}${fi.distance ? ' + distancia' : ''} · ${video.videoWidth}×${video.videoHeight} · luz: ${controls.length ? controls.join(', ') : 'sin control (la cámara no lo permite)'}`; }, 800);
       const decode = await getDecoder(canvas);
       status.textContent = 'Apunta la cámara al código QR del cliente.';
       scanning = true;

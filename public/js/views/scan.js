@@ -24,7 +24,8 @@
         <div class="hint center" id="scanStatus">iniciando cámara…</div>
         <label id="camPickWrap" style="display:none;margin-top:8px">cámara
           <select id="camPick"></select></label>
-        <label class="inv-toggle" id="brightWrap" style="display:none;margin-top:8px"><input type="checkbox" id="brightMode">☀️ pantalla brillante (oscurece la cámara)</label>
+<div id="focusWrap" style="display:none;margin-top:8px;align-items:center;gap:10px"><button class="btn" type="button" id="refocusBtn">🔍 reenfocar</button><input type="range" id="focusRange" style="flex:1;display:none"></div>
+                <label class="inv-toggle" id="brightWrap" style="display:none;margin-top:8px"><input type="checkbox" id="brightMode">☀️ pantalla brillante (oscurece la cámara)</label>
       </div>
       <div id="scanResult"></div>
       <form id="manualForm" class="row2" style="margin-top:10px">
@@ -227,8 +228,22 @@
         const decode = await getDecoder();
         scanning = true;
         // Diagnostics line: what the camera actually gave us and which decoder runs.
+        if (QE) {
+        const fWrap = app.querySelector('#focusWrap'), fBtn = app.querySelector('#refocusBtn'), fRange = app.querySelector('#focusRange');
+        const fi = QE.focusInfo(track);
+        if (fWrap && (fi.modes.length || fi.distance)) {
+          fWrap.style.display = 'flex';
+          fBtn.onclick = () => QE.refocus(track);
+          if (fi.distance && fi.modes.includes('manual')) {
+            fRange.style.display = ''; fRange.min = fi.distance.min; fRange.max = fi.distance.max; fRange.step = fi.distance.step || 0.01;
+            fRange.value = fi.current !== undefined ? fi.current : fi.distance.min;
+            fRange.oninput = () => QE.setFocus(track, Number(fRange.value));
+          }
+        }
+        }
         const controls = QE ? QE.lightControls(track) : [];
-        const diag = () => `${video.videoWidth}×${video.videoHeight} · ${('BarcodeDetector' in window) && decoderKind === 'native' ? 'nativo' : 'jsQR'} · luz: ${controls.length ? controls.join(', ') : 'sin control (la cámara no lo permite)'}${QE ? '' : ' · sin mejoras (recarga con Ctrl+Shift+R)'}${lastErr ? ' · error: ' + lastErr : ''}`;
+        const fdiag = QE ? QE.focusInfo(track) : { modes: [] };
+        const diag = () => `enfoque: ${fdiag.modes.length ? fdiag.modes.join('/') : 'sin control'}${fdiag.distance ? ' + distancia' : ''} · ${video.videoWidth}×${video.videoHeight} · ${('BarcodeDetector' in window) && decoderKind === 'native' ? 'nativo' : 'jsQR'} · luz: ${controls.length ? controls.join(', ') : 'sin control (la cámara no lo permite)'}${QE ? '' : ' · sin mejoras (recarga con Ctrl+Shift+R)'}${lastErr ? ' · error: ' + lastErr : ''}`;
         let frames = 0, lastErr = '';
         status.innerHTML = `apunta al código QR del cliente<br><small class="hint" id="scanDiag"></small>`;
         const diagEl = status.querySelector('#scanDiag');

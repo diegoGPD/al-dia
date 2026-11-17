@@ -14,8 +14,8 @@
 
   function constraints(deviceId) {
     const video = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } };
-    video.width = { ideal: 1920 };
-    video.height = { ideal: 1080 };
+    video.width = { ideal: 1280 };          // 1080p turns autofocus off on some webcams
+    video.height = { ideal: 720 };
     video.frameRate = { ideal: 30 };
     return { video };
   }
@@ -52,6 +52,25 @@
   }
   const snap = (v, r) => r.step ? Math.round(v / r.step) * r.step : v;
   const lerp = (r, t) => r.min + (r.max - r.min) * t;
+
+  // Focus: what the camera offers, a way to nudge autofocus, and manual distance.
+  function focusInfo(track) {
+    const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+    return { modes: caps.focusMode || [], distance: caps.focusDistance || null,
+      current: (track && track.getSettings ? track.getSettings() : {}).focusDistance };
+  }
+  async function refocus(track) {
+    const f = focusInfo(track);
+    const seq = [];
+    if (f.modes.includes('manual')) seq.push({ focusMode: 'manual' });
+    if (f.modes.includes('single-shot')) seq.push({ focusMode: 'single-shot' });
+    if (f.modes.includes('continuous')) seq.push({ focusMode: 'continuous' });
+    for (const c of seq) { try { await track.applyConstraints({ advanced: [c] }); } catch { /* ignore */ } await new Promise(r => setTimeout(r, 150)); }
+  }
+  async function setFocus(track, distance) {
+    try { await track.applyConstraints({ advanced: [{ focusMode: 'manual' }, { focusDistance: distance }] }); return true; }
+    catch { try { await track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: distance }] }); return true; } catch { return false; } }
+  }
 
   // Exposure presets: 'auto', 'dark' (mild) and 'darkest' (for a phone at full
   // brightness). Each is a list of constraints applied one by one.
@@ -203,5 +222,5 @@
     wrapper.appendChild(g);
   }
 
-  window.QREnhance = { constraints, tune, alternate, lightControls, decodeFrame, overlay };
+  window.QREnhance = { constraints, tune, alternate, lightControls, focusInfo, refocus, setFocus, decodeFrame, overlay };
 })();
