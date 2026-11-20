@@ -354,5 +354,67 @@ function missing(locationId, lookbackDays = 30) {
   return out.sort((a, b) => b.date.localeCompare(a.date) || a.type.localeCompare(b.type));
 }
 
-module.exports = { TYPES, businessDate, ensureTemplates, templateFull, startOrResume, runFull,
+// Bulk paste into a template. Text format, one line each:
+//   # TÍTULO DE SECCIÓN     (matches an existing section, ignoring case and
+//                            accents, or creates a new one at the end)
+//   actividad               (added at the end of the current section)
+//   ! actividad             (same, shown as a red warning)
+// An activity already in that template (same text, ignoring case/accents/
+// punctuation) is skipped, so pasting twice adds nothing. replace=true first
+// DEACTIVATES every active section — nothing is deleted, and runs already
+// started keep their own copy.
+const norm = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  .replace(/[^a-z0-9ñ ]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+function parseList(text) {
+  const sections = [];
+  let cur = null;
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim().replace(/^[-•*]\s*(\[\s?\]\s*)?/, '').trim();
+    if (!line) continue;
+    if (line.startsWith('#')) { cur = { title: line.replace(/^#+\s*/, '').trim(), items: [] }; if (cur.title) sections.push(cur); continue; }
+    if (!cur) { cur = { title: 'GENERAL', items: [] }; sections.push(cur); }
+    const warning = line.startsWith('!');
+    const t = warning ? line.slice(1).trim() : line;
+    if (t) cur.items.push({ text: t, warning: warning ? 1 : 0 });
+  }
+  return sections.filter(s => s.items.length);
+}
+
+function importList(templateId, text, { replace = false, dryRun = false } = {}) {
+  const parsed = parseList(text);
+  const out = { secciones_nuevas: 0, actividades: 0, repetidas: 0, desactivadas: 0 };
+  db.exec('BEGIN');
+  try {
+    if (replace) out.desactivadas = Number(db.prepare(
+      'UPDATE checklist_sections SET active = 0 WHERE template_id = ? AND active = 1').run(templateId).changes);
+    const existing = db.prepare('SELECT * FROM checklist_sections WHERE template_id = ? AND active = 1 ORDER BY position').all(templateId);
+    const have = new Set(db.prepare(
+      `SELECT i.text FROM checklist_items i JOIN checklist_sections s ON s.id = i.section_id
+        WHERE s.template_id = ? AND s.active = 1 AND i.active = 1`).all(templateId).map(r => norm(r.text)));
+    for (const sec of parsed) {
+      let target = existing.find(e => norm(e.title) === norm(sec.title));
+      if (!target) {
+        const pos = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 p FROM checklist_sections WHERE template_id = ?').get(templateId).p;
+        const id = Number(db.prepare('INSERT INTO checklist_sections (template_id, title, position) VALUES (?,?,?)')
+          .run(templateId, sec.title, pos).lastInsertRowid);
+        target = { id, title: sec.title };
+        existing.push(target);
+        out.secciones_nuevas++;
+      }
+      for (const it of sec.items) {
+        if (have.has(norm(it.text))) { out.repetidas++; continue; }
+        const pos = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 p FROM checklist_items WHERE section_id = ?').get(target.id).p;
+        db.prepare('INSERT INTO checklist_items (section_id, text, warning, position) VALUES (?,?,?,?)')
+          .run(target.id, it.text, it.warning, pos);
+        have.add(norm(it.text));
+        out.actividades++;
+      }
+    }
+    db.exec(dryRun ? 'ROLLBACK' : 'COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  return out;
+}
+
+module.exports = { parseList, importList, TYPES, businessDate, ensureTemplates, templateFull, startOrResume, runFull,
   applyOps, finish, todayStatus, history, missing };

@@ -437,6 +437,24 @@ function staffRoutes(r) {
     sendTpl(req, res, tplOf(req, s.template_id));
   });
 
+  // Bulk paste. GET returns the prepared list for this type from the repo
+  // (data-seed/checklist-<type>.txt), so the owner reviews it before applying.
+  r.get(`${A}/template/:id/import`, requireOwner, (req, res) => {
+    const t = tplOf(req, req.params.id);
+    if (!t) return res.status(404).json({ error: 'No encontrado' });
+    const fs = require('node:fs'), path = require('node:path');
+    const file = path.join(__dirname, '..', '..', 'data-seed', `checklist-${t.type}.txt`);
+    res.json({ text: fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '' });
+  });
+  r.post(`${A}/template/:id/import`, requireOwner, (req, res) => {
+    const t = tplOf(req, req.params.id);
+    if (!t) return res.status(404).json({ error: 'No encontrado' });
+    const text = String(req.body.text || '');
+    if (!cl.parseList(text).length) return res.status(400).json({ error: 'No hay actividades en el texto.' });
+    const result = cl.importList(t.id, text, { replace: !!req.body.replace, dryRun: !!req.body.preview });
+    res.json({ ...result, template: cl.templateFull(t.location_id, t.type, { includeInactive: true }) });
+  });
+
   // New order = the list of ids as the admin arranged them.
   r.post(`${A}/reorder`, requireOwner, (req, res) => {
     const ids = (req.body.ids || []).map(Number);

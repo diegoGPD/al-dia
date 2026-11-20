@@ -144,6 +144,7 @@
         </div>`).join('')}
       ${secs.length ? '' : '<div class="card"><div class="hint">Este checklist está vacío. Agrega la primera sección para que los gerentes puedan usarlo.</div></div>'}
       <button class="btn primary full" id="pAddSec" data-id="${t.id}">+ Agregar sección</button>
+      <button class="btn full" id="pImport" data-id="${t.id}" style="margin-top:8px">📋 Pegar lista</button>
       <script type="application/json" id="pData">${JSON.stringify(secs.map(s => ({ id: s.id, items: s.items.map(i => i.id) }))).replace(/</g, '\\u003c')}</script>`;
   }
 
@@ -274,6 +275,38 @@
       });
     });
     const addSec = app.querySelector('#pAddSec'); if (addSec) addSec.onclick = () => secForm(null, Number(addSec.dataset.id));
+    // Bulk paste: opens with the prepared list for this type (if any), shows
+    // what it would do, and applies on the second tap.
+    const imp = app.querySelector('#pImport');
+    if (imp) imp.onclick = guard(async () => {
+      const id = Number(imp.dataset.id);
+      const pre = await api(`/gerente-admin/template/${id}/import`);
+      modal(`
+        <h3>Pegar lista</h3>
+        <p class="hint">Una actividad por renglón. <strong># TÍTULO</strong> abre una sección (si ya existe, se agrega ahí). <strong>!</strong> al inicio la marca como advertencia en rojo. Las que ya están en el checklist se saltan.</p>
+        <textarea id="impText" rows="16" style="width:100%;font-family:inherit;font-size:14px">${esc(pre.text)}</textarea>
+        <label class="inv-toggle"><input type="checkbox" id="impReplace">Reemplazar: desactivar las secciones actuales primero (no se borra nada)</label>
+        <p class="hint" id="impPrev"></p>
+        <div class="modal-actions"><button type="button" class="btn" data-close>Cerrar</button>
+          <button type="button" class="btn primary" id="impGo">Revisar</button></div>`, (wrap, close) => {
+        wrap.querySelector('[data-close]').onclick = close;
+        const go = wrap.querySelector('#impGo'), prev = wrap.querySelector('#impPrev');
+        const reset = () => { go.dataset.sure = ''; go.textContent = 'Revisar'; prev.textContent = ''; };
+        wrap.querySelector('#impText').oninput = reset;
+        wrap.querySelector('#impReplace').onchange = reset;
+        go.onclick = guard(async () => {
+          const body = { text: wrap.querySelector('#impText').value, replace: wrap.querySelector('#impReplace').checked };
+          if (go.dataset.sure !== '1') {
+            const r = await api(`/gerente-admin/template/${id}/import`, { method: 'POST', body: { ...body, preview: true } });
+            prev.textContent = `Se agregarían ${r.actividades} actividades${r.secciones_nuevas ? ` y ${r.secciones_nuevas} secciones nuevas` : ''}${r.repetidas ? `; ${r.repetidas} ya existen y se saltan` : ''}${r.desactivadas ? `; se desactivan ${r.desactivadas} secciones actuales` : ''}.`;
+            if (!r.actividades && !r.desactivadas) { prev.textContent = 'Nada nuevo: todo ya está en el checklist.'; return; }
+            go.dataset.sure = '1'; go.textContent = 'Aplicar'; return;
+          }
+          const r = await api(`/gerente-admin/template/${id}/import`, { method: 'POST', body });
+          close(); toast(`Listo: ${r.actividades} actividades agregadas`); render();
+        });
+      });
+    });
     app.querySelectorAll('.p-sec').forEach(b => b.onclick = () => secForm(JSON.parse(b.dataset.s)));
     app.querySelectorAll('.p-item').forEach(b => b.onclick = () => itemForm(JSON.parse(b.dataset.i)));
     app.querySelectorAll('.p-additem').forEach(b => b.onclick = () => itemForm(null, Number(b.dataset.sec)));

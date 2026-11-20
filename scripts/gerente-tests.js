@@ -186,6 +186,33 @@ function client() {
   chk('TRC template is separate and untouched', 'Apagar la barra caliente.',
     (await owner('GET', `/gerente-admin/template?location=${TRC}&type=cierre`)).json.sections[0].items[0].text);
 
+  console.log('== bulk paste into a template ==');
+  const ap = (await owner('GET', `/gerente-admin/template?location=${MTY}&type=apertura`)).json;
+  let pre = (await owner('GET', `/gerente-admin/template/${ap.id}/import`)).json;
+  chk('prepared apertura list is offered', true, pre.text.includes('# ABRIR EL LOCAL Y GAS'));
+  let imp = (await owner('POST', `/gerente-admin/template/${ap.id}/import`, { text: pre.text, preview: true })).json;
+  chk('preview counts but writes nothing', [33, 6, 0], [imp.actividades, imp.secciones_nuevas,
+    (await owner('GET', `/gerente-admin/template?location=${MTY}&type=apertura`)).json.sections.length]);
+  imp = (await owner('POST', `/gerente-admin/template/${ap.id}/import`, { text: pre.text })).json;
+  chk('applied: 6 sections, 33 activities, in order', [6, 33, 'Retirar los candados de las rejas y abrir la puerta de cocina para comenzar labores.'],
+    [imp.template.sections.length, imp.template.sections.reduce((n, s) => n + s.items.length, 0), imp.template.sections[0].items[0].text]);
+  imp = (await owner('POST', `/gerente-admin/template/${ap.id}/import`, { text: pre.text })).json;
+  chk('pasting twice adds nothing', [0, 33], [imp.actividades, imp.repetidas]);
+  imp = (await owner('POST', `/gerente-admin/template/${ap.id}/import`, { text: '# barra caliente\n- [ ] Algo nuevo\n! Cuidado con esto' })).json;
+  const bc = imp.template.sections.find(s => s.title === 'BARRA CALIENTE');
+  chk('section matched ignoring case; bullets stripped; ! is a warning', [4, 'Algo nuevo', 1], [bc.items.length, bc.items[2].text, bc.items[3].warning]);
+  const ci = (await owner('GET', `/gerente-admin/template?location=${TRC}&type=cierre`)).json;
+  const ciBefore = ci.sections.length;
+  pre = (await owner('GET', `/gerente-admin/template/${ci.id}/import`)).json;
+  imp = (await owner('POST', `/gerente-admin/template/${ci.id}/import`, { text: pre.text })).json;
+  chk('cierre additions land in the existing sections', [ciBefore, 8],
+    [imp.template.sections.length, imp.actividades]);
+  const lav = imp.template.sections.find(s => s.title === 'LAVADO Y LIMPIEZA');
+  chk('appended at the end of the section', 'Dejar las mesas de trabajo y de barra limpias y listas para usarse el día siguiente.', lav.items[lav.items.length - 1].text);
+  imp = (await owner('POST', `/gerente-admin/template/${ap.id}/import`, { text: '# NUEVA\nUna', replace: true })).json;
+  chk('replace deactivates, never deletes', [6, 1], [imp.desactivadas, imp.template.sections.filter(s => s.active).length]);
+  chk('tablet cannot import', 401, (await tablet('POST', `/gerente-admin/template/${ap.id}/import`, { text: '# X\ny' }, A)).status);
+
   console.log('== finish, then immutable ==');
   r = await tablet('POST', '/g/checklist/finish', { run_id: run.id, comments: 'Faltó pollo',
     ops: items.map(i => ({ item_id: i.id, checked: true, at: new Date().toISOString() })) }, Bh);
