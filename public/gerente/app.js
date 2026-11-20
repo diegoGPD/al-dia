@@ -8,7 +8,7 @@
 'use strict';
 (() => {
   const app = document.getElementById('app');
-  const IDLE_MS = 5 * 60e3;
+  const IDLE_MS = 60 * 60e3;          // ask for the PIN again after 1 h without use
   const TZ_OFFSET_H = -6;                       // America/Monterrey, no DST
 
   // ------------------------------------------------------------ helpers ----

@@ -8,7 +8,7 @@
 (() => {
   const app = document.getElementById('app');
   const M = window.InsumoMatch;
-  const IDLE_MS = 5 * 60e3;
+  const IDLE_MS = 60 * 60e3;          // ask for the PIN again after 1 h without use
 
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const money = n => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(n) || 0);
